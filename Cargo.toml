@@ -1,0 +1,42 @@
+[package]
+name = "codex_config"
+version = "0.1.0"
+edition = "2024"
+description = "A friendly desktop GUI for editing the Codex CLI config.toml and model catalog"
+license = "MIT"
+
+[lib]
+name = "codex_config"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-config"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.36.2"
+egui = "0.36.2"
+egui_extras = { version = "0.36.2", features = ["all_loaders"] }
+egui-notify = "0.23.0"
+toml_edit = { version = "0.25.15", features = ["serde"] }
+toml = { version = "1.1.6", default-features = false, features = ["parse"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+anyhow = "1.0.104"
+dirs = "7.0.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+open = "5.4.4"
+rfd = "0.17.2"
+similar = "3.2.0"
+ureq = { version = "3.4.1", features = ["json"] }
+egui-phosphor = "0.14.0"
+sysinfo = "0.39.6"
+
+[dev-dependencies]
+egui_kittest = { version = "0.36.2", features = ["snapshot", "wgpu", "eframe"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+tempfile = "3"
+
+[profile.release]
+opt-level = 2
+lto = "thin"

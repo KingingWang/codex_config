@@ -1,0 +1,90 @@
+{
+  "models": [
+    {
+      "slug": "gpt-5.2-codex",
+      "display_name": "GPT-5.2 Codex",
+      "description": "适合日常写代码",
+      "provider": "relay",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "shell_type": "shell_command",
+      "context_window": 400000,
+      "max_context_window": 400000,
+      "input_modalities": ["text", "image"],
+      "truncation_policy": { "mode": "tokens", "limit": 32768 },
+      "support_verbosity": true,
+      "default_verbosity": "medium",
+      "default_reasoning_summary": "auto",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "轻量推理" },
+        { "effort": "medium", "description": "平衡" },
+        { "effort": "high", "description": "深入" },
+        { "effort": "xhigh", "description": "超高" }
+      ],
+      "experimental_supported_tools": [],
+      "apply_patch_tool_type": "freeform",
+      "supports_parallel_tool_calls": true
+    },
+    {
+      "slug": "claude-opus-5",
+      "display_name": "Claude Opus 5",
+      "description": "复杂重构首选",
+      "provider": "relay",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 2,
+      "shell_type": "shell_command",
+      "context_window": 200000,
+      "input_modalities": ["text", "image"],
+      "truncation_policy": { "mode": "tokens", "limit": 25600 },
+      "support_verbosity": false,
+      "default_reasoning_summary": "none",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "medium", "description": "平衡" },
+        { "effort": "high", "description": "深入" }
+      ],
+      "experimental_supported_tools": []
+    },
+    {
+      "slug": "qwen3-coder",
+      "display_name": "Qwen3 Coder (本地)",
+      "description": "本地离线模型",
+      "provider": "ollama",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 3,
+      "shell_type": "shell_command",
+      "context_window": 128000,
+      "input_modalities": ["text"],
+      "truncation_policy": { "mode": "tokens", "limit": 16384 },
+      "support_verbosity": false,
+      "default_reasoning_summary": "none",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "轻量" },
+        { "effort": "medium", "description": "平衡" }
+      ],
+      "experimental_supported_tools": []
+    },
+    {
+      "slug": "broken-model",
+      "display_name": "坏掉的模型",
+      "description": "绑定了不存在的服务商，用来验证健康检查",
+      "provider": "does-not-exist",
+      "visibility": "hide",
+      "supported_in_api": true,
+      "priority": 9,
+      "shell_type": "shell_command",
+      "context_window": 8000,
+      "input_modalities": ["text"],
+      "truncation_policy": { "mode": "tokens", "limit": 4096 },
+      "support_verbosity": false,
+      "default_reasoning_summary": "none",
+      "supported_reasoning_levels": [],
+      "experimental_supported_tools": []
+    }
+  ]
+}
