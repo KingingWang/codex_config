@@ -116,8 +116,12 @@ impl App {
                 self.dialog = None;
             }
             Act::CreateCatalog(filename) => {
-                self.create_catalog(&filename);
-                self.dialog = None;
+                if self.is_remote() {
+                    self.start_remote_create_catalog(filename);
+                } else {
+                    self.create_catalog(&filename);
+                    self.dialog = None;
+                }
             }
             Act::ImportModels { provider, ids } => {
                 self.import_remote_models(&provider, &ids);
@@ -594,7 +598,10 @@ impl App {
                 widgets::note(ui, "这个文件已经存在了。换一个名字，或者用「选择已有文件」直接指向它。", theme::WARN);
             }
             if self.is_remote() {
-                widgets::hint(ui, "将在远程机器创建；保存时检查文件是否已存在，不覆盖已有文件。");
+                widgets::hint(ui, "创建前先检查远端路径；保存时再次核验，不覆盖已有文件。");
+                if let Some(error) = &self.remote.error {
+                    widgets::note(ui, error, theme::DANGER);
+                }
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {

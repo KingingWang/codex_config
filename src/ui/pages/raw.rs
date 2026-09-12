@@ -154,34 +154,7 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         ui.add_enabled_ui(can_apply, |ui| {
             if widgets::primary_button(ui, &format!("{} 应用到编辑器", icons::CHECK)).clicked()
             {
-                let buffer = app.raw_buffer.clone();
-                let result = if is_catalog {
-                    if let Some(doc) = &mut app.doc {
-                        doc.apply_catalog_text(&buffer)
-                    } else {
-                        Ok(())
-                    }
-                } else if let Some(doc) = &mut app.doc {
-                    doc.apply_config_text(&buffer)
-                } else {
-                    Ok(())
-                };
-                match result {
-                    Ok(()) => {
-                        if let Some(doc) = &app.doc {
-                            let applied = if is_catalog {
-                                doc.catalog_text()
-                            } else {
-                                doc.config_text()
-                            };
-                            app.raw_buffer.clone_from(&applied);
-                            app.raw_origin = applied;
-                        }
-                        app.reset_editors();
-                        app.toast_info("已应用，其它页面已经同步");
-                    }
-                    Err(err) => app.toast_error(format!("应用失败：{err:#}")),
-                }
+                app.apply_raw_source();
             }
         });
         if widgets::ghost_button(ui, "\u{21BB} 放弃这里的修改").clicked() {

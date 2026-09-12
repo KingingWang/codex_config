@@ -30,6 +30,7 @@ enum ProviderAction {
     Rename(String),
     Delete(String),
     Probe(String, Probe),
+    CheckEnvironment,
 }
 
 pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
@@ -248,6 +249,7 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
             let model = app.probe_model_for(&id);
             app.start_probe(&id, probe, model, ctx);
         }
+        ProviderAction::CheckEnvironment => app.start_remote_environment_check(),
     }
 }
 
@@ -469,11 +471,19 @@ fn editor(
                     }
                     let key = editor.env_key.clone();
                     if !key.is_empty() && app.is_remote() {
-                        widgets::note(
-                            ui,
-                            "这是远程机器的环境变量。本工具不读取或验证远端密钥，也不会使用本机的同名变量。",
-                            theme::TEXT_DIM,
-                        );
+                        let status = app
+                            .remote
+                            .env_status
+                            .iter()
+                            .find(|status| status.name == key);
+                        let message = match status {
+                            Some(status) if status.is_set => {
+                                "上次检查：远端变量已设置（不返回值）。"
+                            }
+                            Some(_) => "上次检查：远端变量未设置或为空。",
+                            None => "远端变量尚未检查；可在下方点击「检查远端环境变量」。",
+                        };
+                        widgets::note(ui, message, theme::TEXT_DIM);
                     }
                     if !key.is_empty() && !app.is_remote() {
                         match std::env::var(&key) {
@@ -687,10 +697,7 @@ fn editor(
 }
 
 fn test_card(app: &mut App, ui: &mut Ui, row: &Row, action: &mut ProviderAction) {
-    let busy = app
-        .probe
-        .as_ref()
-        .is_some_and(|probe| probe.provider_id == row.id);
+    let busy = app.probe.is_some() || app.ssh_busy();
     let model = app.probe_model_for(&row.id);
     widgets::section(
         ui,
@@ -702,11 +709,11 @@ fn test_card(app: &mut App, ui: &mut Ui, row: &Row, action: &mut ProviderAction)
                 if app.is_remote() {
                     widgets::note(
                         ui,
-                        "远程配置请在目标机器验证；此处不使用本机网络或密钥进行测试。",
+                        "测试请求和模型列表均通过 SSH 在远端请求，环境变量密钥也在远端解析；不会使用本机密钥。",
                         theme::TEXT_DIM,
                     );
                 }
-                ui.add_enabled_ui(!busy && !app.is_remote(), |ui| {
+                ui.add_enabled_ui(!busy, |ui| {
                     let label = match &model {
                         Some(model) => format!("{} 发一条测试请求（用 {model}）", icons::TEST),
                         None => format!("{} 发一条测试请求", icons::TEST),
@@ -717,12 +724,56 @@ fn test_card(app: &mut App, ui: &mut Ui, row: &Row, action: &mut ProviderAction)
                     if widgets::ghost_button(ui, "\u{2261} 拉取模型列表").clicked() {
                         *action = ProviderAction::Probe(row.id.clone(), Probe::ListModels);
                     }
+                    if app.is_remote()
+                        && widgets::ghost_button(ui, "检查远端环境变量").clicked()
+                    {
+                        *action = ProviderAction::CheckEnvironment;
+                    }
                 });
                 if busy {
                     ui.spinner();
                     ui.label(RichText::new("正在请求…").size(12.0).color(theme::TEXT_DIM));
                 }
             });
+            widgets::hint(
+                ui,
+                "聊天测试会实际发送一条短请求，可能产生少量费用；取消等待不能撤销已发送的请求。",
+            );
+            if app.is_remote() {
+                if let Some(view) = app
+                    .doc
+                    .as_ref()
+                    .and_then(|doc| provider_ops::view(&doc.config, &row.id))
+                {
+                    let mut names: Vec<_> = view
+                        .env_http_headers
+                        .into_iter()
+                        .map(|(_, name)| name)
+                        .collect();
+                    if !view.env_key.is_empty() {
+                        names.push(view.env_key);
+                    }
+                    names.sort();
+                    names.dedup();
+                    for name in names.into_iter().filter(|name| !name.is_empty()) {
+                        let status = app
+                            .remote
+                            .env_status
+                            .iter()
+                            .find(|status| status.name == name);
+                        let (text, color) = match status {
+                            Some(status) if status.is_set => ("已设置", theme::OK),
+                            Some(_) => ("未设置或为空", theme::WARN),
+                            None => ("尚未检查", theme::TEXT_DIM),
+                        };
+                        widgets::note(ui, &format!("环境变量 {name}：{text}"), color);
+                    }
+                }
+                widgets::hint(
+                    ui,
+                    "环境状态是上次 SSH 非交互会话的检查快照，不代表已运行的 Codex 进程环境。",
+                );
+            }
             if model.is_none() {
                 widgets::hint(
                     ui,

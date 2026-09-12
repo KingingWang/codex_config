@@ -7,8 +7,22 @@ use egui::{Context, RichText};
 
 use crate::app::App;
 use crate::doc::Document;
+use crate::doc::providers::ProviderView;
+use crate::net::Probe;
 use crate::remote::{self, Job, JobResult, SshTarget};
+use crate::remote_browser::{BrowserPurpose, RemoteBrowser};
 use crate::ui::{theme, widgets};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RemoteActivity {
+    #[default]
+    Read,
+    Probe(Probe),
+    Environment,
+    Browse,
+    CreateCatalog,
+    ApplyConfig,
+}
 
 pub struct RemoteUi {
     pub target: Option<SshTarget>,
@@ -23,6 +37,9 @@ pub struct RemoteUi {
     pub discard_confirmed: bool,
     pub error: Option<String>,
     pub job: Option<Job>,
+    pub activity: RemoteActivity,
+    pub env_status: Vec<remote::EnvStatus>,
+    pub browser: Option<RemoteBrowser>,
     pub catalog_open: bool,
     pub catalog_path: String,
     pub ctx: Context,
@@ -43,6 +60,9 @@ impl RemoteUi {
             discard_confirmed: false,
             error: None,
             job: None,
+            activity: RemoteActivity::Read,
+            env_status: Vec::new(),
+            browser: None,
             catalog_open: false,
             catalog_path: String::new(),
             ctx,
@@ -88,8 +108,10 @@ impl App {
         if self.ssh_busy() {
             return;
         }
+        self.remote.browser = None;
         self.remote.open = true;
         self.remote.error = None;
+        self.remote.activity = RemoteActivity::Read;
         self.remote.discard_confirmed = false;
         self.remote.use_ssh = self.is_remote();
         if let Some(target) = &self.remote.target {
@@ -137,6 +159,102 @@ impl App {
         }));
     }
 
+    pub(crate) fn start_remote_probe(
+        &mut self,
+        provider: ProviderView,
+        kind: Probe,
+        model: Option<String>,
+    ) {
+        if self.ssh_busy() || !self.is_remote() {
+            return;
+        }
+        let Some(target) = self.remote.target.clone() else {
+            self.toast_error("远程配置未绑定 SSH 目标，请重新连接后发送请求。");
+            return;
+        };
+        self.remote.error = None;
+        self.last_outcome = None;
+        self.remote.activity = RemoteActivity::Probe(kind);
+        self.remote.job = Some(Job::spawn(self.remote.ctx.clone(), false, move |cancel| {
+            let outcome = remote::probe(&target, &provider, kind, model, cancel)?;
+            Ok(JobResult::Probed(provider.id, kind, outcome))
+        }));
+    }
+
+    /// Check all currently referenced variable names, never their values.
+    pub fn start_remote_environment_check(&mut self) {
+        if self.ssh_busy() || !self.is_remote() {
+            return;
+        }
+        let Some(target) = self.remote.target.clone() else {
+            self.toast_error("请先连接 SSH 目标再检查环境变量。");
+            return;
+        };
+        let names = self.remote_environment_names();
+        self.remote.env_status.clear();
+        self.remote.error = None;
+        self.remote.activity = RemoteActivity::Environment;
+        self.remote.job = Some(Job::spawn(self.remote.ctx.clone(), false, move |cancel| {
+            remote::check_environment(&target, &names, cancel).map(JobResult::Environment)
+        }));
+    }
+
+    pub fn remote_environment_names(&self) -> Vec<String> {
+        let Some(doc) = &self.doc else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        for provider in crate::doc::providers::all(&doc.config) {
+            if !provider.env_key.is_empty() {
+                names.push(provider.env_key);
+            }
+            names.extend(
+                provider
+                    .env_http_headers
+                    .into_iter()
+                    .map(|(_, name)| name)
+                    .filter(|name| !name.is_empty()),
+            );
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    pub(crate) fn start_remote_create_catalog(&mut self, filename: String) {
+        if self.ssh_busy() || !self.is_remote() {
+            return;
+        }
+        if self.has_raw_draft() || self.model_input_error.is_some() {
+            self.toast_error("请先应用或放弃源文件草稿和无效模型修改。");
+            return;
+        }
+        let (Some(target), Some(doc)) = (self.remote.target.clone(), self.doc.clone()) else {
+            self.toast_error("请先连接 SSH 目标再创建模型目录。");
+            return;
+        };
+        self.remote.error = None;
+        self.remote.activity = RemoteActivity::CreateCatalog;
+        self.remote.job = Some(Job::spawn(self.remote.ctx.clone(), false, move |cancel| {
+            remote::create_catalog(&target, doc, &filename, cancel).map(JobResult::CatalogCreated)
+        }));
+    }
+
+    pub(crate) fn start_remote_config_apply(&mut self, text: String) {
+        if self.ssh_busy() || !self.is_remote() {
+            return;
+        }
+        let (Some(target), Some(doc)) = (self.remote.target.clone(), self.doc.clone()) else {
+            self.toast_error("请先连接 SSH 目标再应用源文件。");
+            return;
+        };
+        self.remote.error = None;
+        self.remote.activity = RemoteActivity::ApplyConfig;
+        self.remote.job = Some(Job::spawn(self.remote.ctx.clone(), false, move |cancel| {
+            remote::apply_config_text(&target, doc, &text, cancel).map(JobResult::ConfigApplied)
+        }));
+    }
+
     pub fn select_catalog_file(&mut self) {
         if self.ssh_busy() {
             return;
@@ -181,6 +299,7 @@ impl App {
             return;
         };
         self.remote.error = None;
+        self.remote.activity = RemoteActivity::Read;
         self.remote.job = Some(Job::spawn(self.remote.ctx.clone(), false, move |cancel| {
             remote::switch_catalog(&target, doc, &path, cancel).map(JobResult::Catalog)
         }));
@@ -205,9 +324,10 @@ impl App {
             .as_ref()
             .is_some_and(|job| !job.saving && job.cancel.load(Ordering::Relaxed))
         {
-            result = Err(anyhow::anyhow!("已取消读取，保留原来的配置和修改。"));
+            result = Err(anyhow::anyhow!("已取消 SSH 读取，保留原来的配置和修改。"));
         }
         self.remote.job = None;
+        self.remote.activity = RemoteActivity::Read;
         match result {
             Ok(JobResult::Loaded(mut target, doc)) => {
                 // Pin the actual resolved directory so a later reconnect cannot
@@ -222,6 +342,9 @@ impl App {
                 self.show_diff = false;
                 self.load_error = None;
                 self.remote.target = Some(target);
+                self.remote.env_status.clear();
+                self.remote.browser = None;
+                self.remote.catalog_open = false;
                 self.doc = Some(doc);
                 self.remote.open = false;
                 self.remote.discard_confirmed = false;
@@ -248,6 +371,45 @@ impl App {
                 self.remote.catalog_open = false;
                 self.toast_info("已读取远程模型目录；路径修改尚未保存。");
             }
+            Ok(JobResult::Probed(provider, kind, outcome)) => {
+                if kind == Probe::ListModels {
+                    self.offer_model_import(provider.clone(), &outcome);
+                } else if outcome.ok {
+                    self.toasts
+                        .success(format!("{provider}：{}", outcome.summary));
+                } else {
+                    self.toast_error(format!("{provider}：{}", outcome.summary));
+                }
+                self.last_outcome = Some((provider, outcome));
+            }
+            Ok(JobResult::Environment(status)) => {
+                self.remote.env_status = status;
+                self.toast_info(
+                    "已检查远端 SSH 非交互环境；仅返回变量是否设置，未读取密钥到本机。",
+                );
+            }
+            Ok(JobResult::Browsed(target, listing)) => {
+                if let Some(browser) = &mut self.remote.browser
+                    && browser.target == target
+                {
+                    browser.path_input.clone_from(&listing.path);
+                    browser.listing = Some(listing);
+                }
+            }
+            Ok(JobResult::CatalogCreated(doc)) => {
+                self.doc = Some(doc);
+                self.dialog = None;
+                self.editing_model = None;
+                self.page = crate::page::Page::Models;
+                self.toast_info("远端路径检查通过，空目录已在编辑器中准备好；保存时才创建文件。");
+            }
+            Ok(JobResult::ConfigApplied(doc)) => {
+                self.raw_buffer = doc.config_text();
+                self.raw_origin.clone_from(&self.raw_buffer);
+                self.doc = Some(doc);
+                self.reset_editors();
+                self.toast_info("远程源文件已应用到编辑器；尚未写入远端。");
+            }
             Err(error) => {
                 let message = format!("{error:#}");
                 self.remote.error = Some(message.clone());
@@ -268,7 +430,27 @@ impl App {
                         ui.label(if self.remote.job.as_ref().is_some_and(|job| job.saving) {
                             "正在保存到远端…请等待结果，不要关闭应用。"
                         } else {
-                            "正在读取远程配置…当前编辑内容会保留到载入成功。"
+                            match self.remote.activity {
+                                RemoteActivity::Read => {
+                                    "正在读取远程配置…当前编辑内容会保留到载入成功。"
+                                }
+                                RemoteActivity::Probe(Probe::ListModels) => {
+                                    "正在通过 SSH 从远端拉取模型列表…"
+                                }
+                                RemoteActivity::Probe(Probe::Chat) => {
+                                    "正在通过 SSH 发送短测试请求…可能产生少量费用。"
+                                }
+                                RemoteActivity::Environment => {
+                                    "正在检查远端环境变量是否设置…不返回密钥。"
+                                }
+                                RemoteActivity::Browse => "正在读取远端目录列表…",
+                                RemoteActivity::CreateCatalog => {
+                                    "正在检查远端新文件路径…尚未创建文件。"
+                                }
+                                RemoteActivity::ApplyConfig => {
+                                    "正在准备源文件与模型目录快照…失败或取消将保留草稿。"
+                                }
+                            }
                         });
                     });
                     widgets::hint(
@@ -277,11 +459,25 @@ impl App {
                     );
                     if let Some(job) = &self.remote.job
                         && !job.saving
-                        && widgets::ghost_button(ui, "取消读取").clicked()
+                        && widgets::ghost_button(
+                            ui,
+                            match self.remote.activity {
+                                RemoteActivity::Probe(Probe::ListModels) => "取消拉取",
+                                RemoteActivity::Probe(Probe::Chat) => {
+                                    "取消等待（已发送的请求仍可能计费）"
+                                }
+                                _ => "取消读取",
+                            },
+                        )
+                        .clicked()
                     {
                         job.cancel.store(true, Ordering::Relaxed);
                     }
                 });
+            return;
+        }
+        if self.remote.browser.is_some() {
+            self.remote_browser_window(ctx);
             return;
         }
         if self.remote.open {
@@ -321,6 +517,9 @@ impl App {
                         ui.label("远程 CODEX_HOME（可选）");
                         widgets::mono_field(ui, "ssh-home", &mut self.remote.home, "留空：远端 CODEX_HOME 或 ~/.codex");
                         widgets::hint(ui, "可填写 ~/目录 或绝对路径。留空取 SSH 非交互会话的环境，不一定与终端登录相同。");
+                        if widgets::ghost_button(ui, "浏览远程文件夹…").clicked() {
+                            self.open_remote_browser(BrowserPurpose::Home);
+                        }
                         egui::CollapsingHeader::new("SSH 配置文件").show(ui, |ui| {
                             widgets::mono_field(ui, "ssh-config-file", &mut self.remote.config_file, "~/.ssh/config");
                             widgets::hint(ui, "修改文件位置后点击「刷新别名」。连接会使用该配置中的 User、Port、IdentityFile、ProxyJump 等。");
@@ -398,6 +597,9 @@ impl App {
                     }
                     if widgets::primary_button(ui, "读取远程文件").clicked() {
                         self.start_remote_catalog(self.remote.catalog_path.trim().to_owned());
+                    }
+                    if widgets::ghost_button(ui, "浏览远程 JSON 文件…").clicked() {
+                        self.open_remote_browser(BrowserPurpose::Catalog);
                     }
                 });
             self.remote.catalog_open &= open;

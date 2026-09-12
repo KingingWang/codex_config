@@ -175,6 +175,9 @@ impl App {
                 let path = doc.config_path.display().to_string();
                 self.remote.local_home = doc.codex_home.display().to_string();
                 self.remote.target = None;
+                self.remote.env_status.clear();
+                self.remote.browser = None;
+                self.remote.catalog_open = false;
                 self.remote.error = None;
                 self.saved_needs_restart = false;
                 self.last_outcome = None;
@@ -308,9 +311,72 @@ impl App {
     // -- save / revert ------------------------------------------------------
 
     pub fn issues(&self) -> Vec<Issue> {
-        match &self.doc {
+        let mut issues = match &self.doc {
             Some(doc) => validate::validate(doc),
             None => Vec::new(),
+        };
+        if self.is_remote() {
+            for name in self.remote_environment_names() {
+                if self
+                    .remote
+                    .env_status
+                    .iter()
+                    .any(|status| status.name == name && !status.is_set)
+                {
+                    issues.push(Issue {
+                        severity: Severity::Info, page: Page::Providers,
+                        title: format!("远端环境变量 {name} 未设置或为空"),
+                        detail: "这是上次检查的 SSH 非交互会话状态，不代表已运行的 Codex 进程环境；可在服务商页重新检查。".into(),
+                    });
+                }
+            }
+        }
+        issues
+    }
+
+    /// Apply the displayed raw draft, using an atomic background operation for SSH.
+    pub fn apply_raw_source(&mut self) {
+        if self.ssh_busy() {
+            return;
+        }
+        let Some(doc) = &mut self.doc else {
+            return;
+        };
+        let current = if self.raw_tab_is_catalog {
+            doc.catalog_text()
+        } else {
+            doc.config_text()
+        };
+        if self.raw_origin != current {
+            self.toast_error("源文件草稿已过期，请先同步最新内容。");
+            return;
+        }
+        let text = self.raw_buffer.clone();
+        if !self.raw_tab_is_catalog && doc.is_remote() {
+            if self.model_input_error.is_some() || self.provider_input_error.is_some() {
+                self.toast_error("请先修正模型或服务商的无效输入。");
+                return;
+            }
+            self.start_remote_config_apply(text);
+            return;
+        }
+        let result = if self.raw_tab_is_catalog {
+            doc.apply_catalog_text(&text)
+        } else {
+            doc.apply_config_text(&text)
+        };
+        match result {
+            Ok(()) => {
+                self.raw_buffer = if self.raw_tab_is_catalog {
+                    doc.catalog_text()
+                } else {
+                    doc.config_text()
+                };
+                self.raw_origin.clone_from(&self.raw_buffer);
+                self.reset_editors();
+                self.toast_info("已应用，其它页面已经同步");
+            }
+            Err(error) => self.toast_error(format!("应用失败：{error:#}")),
         }
     }
 
@@ -503,8 +569,8 @@ impl App {
         model: Option<String>,
         ctx: &Context,
     ) {
-        if self.is_remote() || self.ssh_busy() {
-            self.toast_info("远程模式不从本机发起服务商测试或读取本机密钥。请在目标机器验证连接。");
+        if self.ssh_busy() || self.probe.is_some() {
+            self.toast_info("已有请求正在进行，请等待完成或取消 SSH 操作。");
             return;
         }
         let Some(doc) = &self.doc else { return };
@@ -512,6 +578,10 @@ impl App {
             self.toast_error("找不到这个服务商，先保存一次再试");
             return;
         };
+        if self.is_remote() {
+            self.start_remote_probe(view, kind, model);
+            return;
+        }
         let slot = net::spawn(ctx, view, model, kind);
         self.probe = Some(ProbeState {
             provider_id: provider_id.to_string(),
@@ -557,6 +627,21 @@ impl App {
             }
         }
         None
+    }
+
+    /// Both local and SSH listings use the same selection/import flow.
+    pub(crate) fn offer_model_import(&mut self, provider: String, outcome: &HttpOutcome) {
+        if !outcome.ok {
+            self.toast_error(format!("{provider}：{}", outcome.summary));
+        } else if outcome.remote_models.is_empty() {
+            self.toast_info("服务商返回成功，模型列表为空。");
+        } else {
+            self.dialog_checkbox = vec![false; outcome.remote_models.len()];
+            self.dialog = Some(Dialog::ImportRemote {
+                provider,
+                models: outcome.remote_models.clone(),
+            });
+        }
     }
 
     /// Model slug used when probing a provider.
@@ -614,15 +699,8 @@ impl eframe::App for App {
         }
         if let Some((provider, kind, outcome)) = self.poll_probe()
             && kind == Probe::ListModels
-            && outcome.ok
         {
-            let models = outcome.remote_models.clone();
-            if models.is_empty() {
-                self.toast_info("服务商返回成功，但没解析出模型列表");
-            } else {
-                self.dialog_checkbox = vec![false; models.len()];
-                self.dialog = Some(Dialog::ImportRemote { provider, models });
-            }
+            self.offer_model_import(provider, &outcome);
         }
 
         self.sidebar(root);

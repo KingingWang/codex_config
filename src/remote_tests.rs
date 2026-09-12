@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn model_list_payload_carries_names_and_explicit_settings_without_local_resolution() {
+    let provider = ProviderView {
+        id: "relay".into(),
+        base_url: "https://fixture.invalid/v1".into(),
+        wire_api: "responses".into(),
+        env_key: "PATH".into(),
+        bearer_token: "fixture-explicit-token".into(),
+        headers: vec![("X-Tenant".into(), "fixture".into())],
+        env_http_headers: vec![("X-Remote".into(), "PATH".into())],
+        query_params: vec![("api-version".into(), "2026-01".into())],
+        command_auth: true,
+        ..ProviderView::default()
+    };
+    let payload = model_list_request(&provider);
+    assert_eq!(payload["operation"], "list_models");
+    assert_eq!(payload["provider"]["env_key"], "PATH");
+    assert_eq!(payload["provider"]["env_http_headers"][0][1], "PATH");
+    assert_eq!(
+        payload["provider"]["bearer_token"],
+        "fixture-explicit-token"
+    );
+    assert_eq!(payload["provider"]["command_auth"], true);
+    assert_eq!(payload["provider"]["headers"][0][1], "fixture");
+    assert_eq!(payload["provider"]["query_params"][0][1], "2026-01");
+    assert!(payload["provider"].get("id").is_none());
+}
+
+#[test]
 fn ssh_arguments_preserve_host_key_verification_and_send_no_user_data_to_shell() {
     let target = SshTarget {
         alias: "fixture".into(),

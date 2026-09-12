@@ -397,6 +397,9 @@ fn files_card(app: &mut App, ui: &mut Ui) {
                 if !app.is_remote() && widgets::ghost_button(ui, "打开文件夹").clicked() {
                     app.open_in_editor(home.clone());
                 }
+                if app.is_remote() && widgets::ghost_button(ui, "浏览远程目录").clicked() {
+                    app.open_remote_browser(crate::remote_browser::BrowserPurpose::Catalog);
+                }
                 if widgets::ghost_button(ui, "重新从磁盘载入").clicked() {
                     app.request_discard();
                 }

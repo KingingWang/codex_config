@@ -9,7 +9,9 @@ use codex_config::app::Dialog;
 use codex_config::doc::catalog;
 use codex_config::doc::toml_ext::TomlPathExt;
 use codex_config::doc::validate::{Severity, validate};
+use codex_config::net::Probe;
 use codex_config::page::Page;
+use codex_config::remote_ui::RemoteActivity;
 use egui_kittest::Harness;
 use egui_kittest::kittest::NodeT;
 use egui_kittest::kittest::Queryable;
@@ -189,6 +191,486 @@ fn remote_mode_blocks_local_file_open_probe_and_restart() {
     assert_eq!(harness.state().page, Page::Raw);
     harness.state_mut().select_catalog_file();
     assert!(harness.state().remote.catalog_open);
+}
+
+#[test]
+fn remote_provider_page_enables_model_listing_chat_and_environment_check() {
+    let (mut harness, _home) = remote_app_harness();
+    harness.state_mut().page = Page::Providers;
+    harness.state_mut().select_provider("relay");
+    harness.run_steps(3);
+    let listing = harness.root().get_by_label("≡ 拉取模型列表");
+    assert!(!listing.accesskit_node().is_disabled());
+    let chat_label = format!(
+        "{} 发一条测试请求（用 gpt-5.2-codex）",
+        codex_config::ui::icons::TEST
+    );
+    let chat = harness.root().get_by_label(&chat_label);
+    assert!(!chat.accesskit_node().is_disabled());
+    assert!(
+        !harness
+            .root()
+            .get_by_label("检查远端环境变量")
+            .accesskit_node()
+            .is_disabled()
+    );
+}
+
+fn remote_app_harness() -> (Harness<'static, App>, tempfile::TempDir) {
+    let (mut harness, _home) = app_harness();
+    let local = harness.state().doc.as_ref().unwrap();
+    let snapshot = codex_config::remote::Snapshot {
+        home: "/fixture/remote".into(),
+        user_home: "/fixture".into(),
+        config: Some(local.config.to_string()),
+        catalog_path: Some("/fixture/remote/model-catalog.json".into()),
+        catalog: local.catalog.as_ref().map(ToString::to_string),
+    };
+    harness.state_mut().doc = Some(codex_config::doc::Document::from_remote(snapshot).unwrap());
+    (harness, _home)
+}
+
+fn queue_remote_models(app: &mut App, outcome: codex_config::net::HttpOutcome, cancelled: bool) {
+    app.remote.activity = RemoteActivity::Probe(Probe::ListModels);
+    queue_ssh_result(
+        app,
+        Ok(codex_config::remote::JobResult::Probed(
+            "relay".into(),
+            Probe::ListModels,
+            outcome,
+        )),
+        cancelled,
+    );
+}
+
+fn queue_ssh_result(
+    app: &mut App,
+    result: anyhow::Result<codex_config::remote::JobResult>,
+    cancelled: bool,
+) {
+    use std::sync::{Arc, atomic::AtomicBool, mpsc};
+    let (sender, receiver) = mpsc::channel();
+    sender.send(result).unwrap();
+    app.remote.job = Some(codex_config::remote::Job {
+        receiver,
+        cancel: Arc::new(AtomicBool::new(cancelled)),
+        saving: false,
+    });
+}
+
+#[test]
+fn remote_chat_uses_ssh_and_returns_status_without_model_import() {
+    let (mut harness, home) = remote_app_harness();
+    let ctx = harness.state().remote.ctx.clone();
+    harness.state_mut().remote.target = Some(codex_config::remote::SshTarget {
+        alias: "-invalid-test-alias".into(),
+        config_file: home.path().join("unused"),
+        home: "/fixture/remote".into(),
+    });
+    harness
+        .state_mut()
+        .start_probe("relay", Probe::Chat, Some("fixture".into()), &ctx);
+    assert!(harness.state().probe.is_none());
+    assert_eq!(
+        harness.state().remote.activity,
+        RemoteActivity::Probe(Probe::Chat)
+    );
+    assert!(harness.state().ssh_busy());
+    let original = harness.state().doc.as_ref().unwrap().catalog_text();
+    queue_ssh_result(
+        harness.state_mut(),
+        Ok(codex_config::remote::JobResult::Probed(
+            "relay".into(),
+            Probe::Chat,
+            model_listing(&[]),
+        )),
+        false,
+    );
+    harness.state_mut().poll_ssh();
+    assert!(harness.state().last_outcome.as_ref().unwrap().1.ok);
+    assert!(harness.state().dialog.is_none());
+    assert_eq!(
+        harness.state().doc.as_ref().unwrap().catalog_text(),
+        original
+    );
+}
+
+#[test]
+fn remote_environment_status_updates_health_and_clears_on_target_change() {
+    let (mut harness, home) = remote_app_harness();
+    queue_ssh_result(
+        harness.state_mut(),
+        Ok(codex_config::remote::JobResult::Environment(vec![
+            codex_config::remote::EnvStatus {
+                name: "RELAY_API_KEY".into(),
+                is_set: false,
+            },
+        ])),
+        false,
+    );
+    harness.state_mut().poll_ssh();
+    assert!(
+        harness
+            .state()
+            .issues()
+            .iter()
+            .any(|issue| issue.title == "远端环境变量 RELAY_API_KEY 未设置或为空")
+    );
+    harness.state_mut().page = Page::Providers;
+    harness.state_mut().select_provider("relay");
+    harness.run_steps(3);
+    assert!(
+        harness
+            .root()
+            .query_by_label("环境变量 RELAY_API_KEY：未设置或为空")
+            .is_some()
+    );
+    harness
+        .state_mut()
+        .doc
+        .as_mut()
+        .unwrap()
+        .config
+        .set_value_at(
+            &["model_providers", "relay", "env_key"],
+            toml_edit::Value::from("NEW_REMOTE_NAME"),
+        );
+    assert!(
+        !harness
+            .state()
+            .issues()
+            .iter()
+            .any(|issue| issue.title.contains("远端环境变量 RELAY_API_KEY"))
+    );
+    harness.state_mut().load(home.path().to_owned());
+    assert!(harness.state().remote.env_status.is_empty());
+    assert!(!harness.state().is_remote());
+}
+
+#[test]
+fn cancelled_remote_environment_check_does_not_publish_its_result() {
+    let (mut harness, _home) = remote_app_harness();
+    queue_ssh_result(
+        harness.state_mut(),
+        Ok(codex_config::remote::JobResult::Environment(vec![
+            codex_config::remote::EnvStatus {
+                name: "RELAY_API_KEY".into(),
+                is_set: true,
+            },
+        ])),
+        true,
+    );
+    harness.state_mut().poll_ssh();
+    assert!(harness.state().remote.env_status.is_empty());
+}
+
+#[test]
+fn remote_raw_config_apply_is_atomic_and_cancellation_preserves_the_draft() {
+    for cancelled in [false, true] {
+        let (mut harness, _home) = remote_app_harness();
+        let original = harness.state().doc.as_ref().unwrap().config_text();
+        harness.state_mut().raw_tab_is_catalog = false;
+        harness.state_mut().raw_source = "config/fixture/remote/config.toml".into();
+        harness.state_mut().raw_origin = original.clone();
+        let text = format!("{original}\n# raw-only edit\n");
+        harness.state_mut().raw_buffer = text.clone();
+        let mut next = harness.state().doc.clone().unwrap();
+        next.apply_config_text(&text).unwrap();
+        queue_ssh_result(
+            harness.state_mut(),
+            Ok(codex_config::remote::JobResult::ConfigApplied(next)),
+            cancelled,
+        );
+        harness.state_mut().poll_ssh();
+        if cancelled {
+            assert_eq!(
+                harness.state().doc.as_ref().unwrap().config_text(),
+                original
+            );
+            assert_eq!(harness.state().raw_origin, original);
+            assert_eq!(harness.state().raw_buffer, text);
+            assert!(harness.state().has_raw_draft());
+        } else {
+            assert!(
+                harness
+                    .state()
+                    .doc
+                    .as_ref()
+                    .unwrap()
+                    .config_text()
+                    .contains("# raw-only edit")
+            );
+            assert_eq!(harness.state().raw_origin, harness.state().raw_buffer);
+            assert!(harness.state().doc.as_ref().unwrap().dirty());
+        }
+    }
+}
+
+#[test]
+fn failed_remote_raw_switch_and_stale_drafts_never_replace_current_config() {
+    let (mut harness, _home) = remote_app_harness();
+    let original = harness.state().doc.as_ref().unwrap().config_text();
+    harness.state_mut().raw_source = "config/fixture/remote/config.toml".into();
+    harness.state_mut().raw_origin = original.clone();
+    harness.state_mut().raw_buffer = "model_catalog_json='missing.json'".into();
+    queue_ssh_result(
+        harness.state_mut(),
+        Err(anyhow::anyhow!("new file missing")),
+        false,
+    );
+    harness.state_mut().poll_ssh();
+    assert_eq!(
+        harness.state().doc.as_ref().unwrap().config_text(),
+        original
+    );
+    assert_eq!(
+        harness.state().raw_buffer,
+        "model_catalog_json='missing.json'"
+    );
+    harness.state_mut().raw_origin = "# stale".into();
+    harness.state_mut().apply_raw_source();
+    assert!(!harness.state().ssh_busy());
+    assert_eq!(
+        harness.state().doc.as_ref().unwrap().config_text(),
+        original
+    );
+}
+
+#[test]
+fn remote_browser_selects_home_without_switching_document_and_rejects_symlinks() {
+    use codex_config::remote::{DirectoryEntry, DirectoryListing, PathKind, SshTarget};
+    use codex_config::remote_browser::{BrowserPurpose, RemoteBrowser};
+    let (mut harness, home) = app_harness();
+    let original_home = harness.state().doc.as_ref().unwrap().codex_home.clone();
+    let target = SshTarget {
+        alias: "fixture".into(),
+        config_file: home.path().join("unused"),
+        home: "".into(),
+    };
+    harness.state_mut().remote.alias = target.alias.clone();
+    harness.state_mut().remote.config_file = target.config_file.to_string_lossy().into_owned();
+    harness.state_mut().remote.browser = Some(RemoteBrowser {
+        target: target.clone(),
+        purpose: BrowserPurpose::Home,
+        path_input: "/remote/chosen".into(),
+        listing: Some(DirectoryListing {
+            path: "/remote/chosen".into(),
+            parent: Some("/remote".into()),
+            truncated: false,
+            entries: vec![DirectoryEntry {
+                name: "unsafe.json".into(),
+                path: "/remote/chosen/unsafe.json".into(),
+                kind: PathKind::Symlink,
+            }],
+        }),
+    });
+    harness.run_steps(3);
+    let link = harness
+        .root()
+        .get_by_label("unsafe.json（符号链接，不可选）");
+    assert!(link.accesskit_node().is_disabled());
+    harness.root().get_by_label("选择此文件夹").click();
+    harness.run_steps(3);
+    assert_eq!(harness.state().remote.home, "/remote/chosen");
+    assert!(harness.state().remote.browser.is_none());
+    assert_eq!(
+        harness.state().doc.as_ref().unwrap().codex_home,
+        original_home
+    );
+    assert!(harness.state().remote.target.is_none());
+}
+
+#[test]
+fn remote_browser_rejects_stale_target_selection() {
+    use codex_config::remote::{DirectoryListing, SshTarget};
+    use codex_config::remote_browser::{BrowserPurpose, RemoteBrowser};
+    let (mut harness, home) = app_harness();
+    harness.state_mut().remote.alias = "different-machine".into();
+    harness.state_mut().remote.browser = Some(RemoteBrowser {
+        target: SshTarget {
+            alias: "original-machine".into(),
+            config_file: home.path().join("unused"),
+            home: "".into(),
+        },
+        purpose: BrowserPurpose::Home,
+        path_input: "/wrong-machine".into(),
+        listing: Some(DirectoryListing {
+            path: "/wrong-machine".into(),
+            parent: None,
+            entries: vec![],
+            truncated: false,
+        }),
+    });
+    harness
+        .state_mut()
+        .select_remote_browser_path("/wrong-machine".into());
+    assert!(harness.state().remote.home.is_empty());
+    assert!(harness.state().remote.browser.is_some());
+}
+
+#[test]
+fn remote_catalog_preflight_only_stages_and_cancel_keeps_existing_catalog() {
+    for cancelled in [false, true] {
+        let (mut harness, home) = remote_app_harness();
+        let original = harness.state().doc.as_ref().unwrap().catalog_path.clone();
+        let mut next = harness.state().doc.clone().unwrap();
+        next.create_catalog("preflight-new.json").unwrap();
+        queue_ssh_result(
+            harness.state_mut(),
+            Ok(codex_config::remote::JobResult::CatalogCreated(next)),
+            cancelled,
+        );
+        harness.state_mut().poll_ssh();
+        if cancelled {
+            assert_eq!(harness.state().doc.as_ref().unwrap().catalog_path, original);
+        } else {
+            assert!(
+                harness
+                    .state()
+                    .doc
+                    .as_ref()
+                    .unwrap()
+                    .catalog_path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("preflight-new.json")
+            );
+            assert!(harness.state().doc.as_ref().unwrap().catalog_dirty());
+        }
+        assert!(!home.path().join("preflight-new.json").exists());
+    }
+}
+
+fn model_listing(ids: &[&str]) -> codex_config::net::HttpOutcome {
+    codex_config::net::HttpOutcome {
+        ok: true,
+        status: 200,
+        summary: "连接成功".into(),
+        detail: String::new(),
+        elapsed_ms: 1,
+        remote_models: ids.iter().map(|id| (*id).to_owned()).collect(),
+    }
+}
+
+#[test]
+fn remote_models_use_ssh_jobs_and_never_fall_back_to_local_probe() {
+    let (mut harness, home) = remote_app_harness();
+    let ctx = harness.state().remote.ctx.clone();
+    // An unbound remote snapshot must never use the local HTTP implementation.
+    harness
+        .state_mut()
+        .start_probe("relay", codex_config::net::Probe::ListModels, None, &ctx);
+    assert!(harness.state().probe.is_none());
+    assert!(!harness.state().ssh_busy());
+
+    // Validation rejects this alias before any SSH executable can be launched.
+    harness.state_mut().remote.target = Some(codex_config::remote::SshTarget {
+        alias: "-invalid-test-alias".into(),
+        config_file: home.path().join("unused"),
+        home: "/fixture/remote".into(),
+    });
+    harness
+        .state_mut()
+        .start_probe("relay", codex_config::net::Probe::ListModels, None, &ctx);
+    assert!(harness.state().probe.is_none());
+    assert!(harness.state().ssh_busy());
+    assert_eq!(
+        harness.state().remote.activity,
+        RemoteActivity::Probe(Probe::ListModels)
+    );
+}
+
+#[test]
+fn remote_models_offer_selection_and_import_without_saving_files() {
+    let (mut harness, home) = remote_app_harness();
+    let catalog_path = home.path().join("model-catalog.json");
+    let original = fs::read_to_string(&catalog_path).unwrap();
+    let before = harness.state().doc.as_ref().unwrap().catalog.clone();
+    queue_remote_models(harness.state_mut(), model_listing(&["remote-new"]), false);
+    harness.run_steps(3);
+    assert!(!harness.state().ssh_busy());
+    assert_eq!(harness.state().remote.activity, RemoteActivity::Read);
+    assert_eq!(harness.state().doc.as_ref().unwrap().catalog, before);
+    assert!(!harness.state().doc.as_ref().unwrap().dirty());
+    assert!(matches!(
+        &harness.state().dialog,
+        Some(Dialog::ImportRemote { provider, models })
+            if provider == "relay" && models == &["remote-new"]
+    ));
+    harness.state_mut().dialog_checkbox = vec![true];
+    harness.run_steps(3);
+    harness.root().get_by_label("导入所选模型").click();
+    harness.run_steps(3);
+    let doc = harness.state().doc.as_ref().unwrap();
+    let models = catalog::models(doc.catalog.as_ref().unwrap()).unwrap();
+    assert!(
+        models
+            .iter()
+            .any(|model| model["slug"] == "remote-new" && model["provider"] == "relay")
+    );
+    assert!(doc.is_remote());
+    assert!(doc.catalog_dirty());
+    assert_eq!(fs::read_to_string(catalog_path).unwrap(), original);
+}
+
+#[test]
+fn cancelled_failed_and_empty_remote_model_lists_preserve_drafts() {
+    for (mut outcome, cancelled) in [
+        (model_listing(&["cancelled-model"]), true),
+        (model_listing(&[]), false),
+        (model_listing(&["must-not-import"]), false),
+    ] {
+        if outcome.remote_models == ["must-not-import"] {
+            outcome.ok = false;
+            outcome.status = 401;
+            outcome.summary = "HTTP 401 未授权".into();
+        }
+        let (mut harness, _home) = remote_app_harness();
+        harness.state_mut().raw_source = "draft".into();
+        harness.state_mut().raw_buffer = "# keep my draft".into();
+        let before = harness.state().doc.as_ref().unwrap().catalog.clone();
+        queue_remote_models(harness.state_mut(), outcome, cancelled);
+        harness.state_mut().poll_ssh();
+        assert!(harness.state().dialog.is_none());
+        assert_eq!(harness.state().doc.as_ref().unwrap().catalog, before);
+        assert_eq!(harness.state().raw_buffer, "# keep my draft");
+        assert!(!harness.state().ssh_busy());
+        assert_eq!(harness.state().remote.activity, RemoteActivity::Read);
+        if cancelled {
+            assert!(harness.state().last_outcome.is_none());
+            assert!(
+                harness
+                    .state()
+                    .remote
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .contains("取消")
+            );
+        }
+    }
+}
+
+#[test]
+fn remote_model_fetch_blocks_environment_switch_until_cancelled() {
+    use std::sync::{Arc, atomic::AtomicBool, mpsc};
+    let (mut harness, home) = remote_app_harness();
+    let (_sender, receiver) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    harness.state_mut().remote.activity = RemoteActivity::Probe(Probe::ListModels);
+    harness.state_mut().remote.job = Some(codex_config::remote::Job {
+        receiver,
+        cancel: cancel.clone(),
+        saving: false,
+    });
+    harness.state_mut().load(home.path().to_path_buf());
+    harness.state_mut().open_environment();
+    assert!(harness.state().is_remote());
+    assert!(!harness.state().remote.open);
+    harness.run_steps(3);
+    harness.root().get_by_label("取消拉取").click();
+    harness.run_steps(3);
+    assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
 }
 
 #[test]

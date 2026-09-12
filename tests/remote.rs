@@ -89,6 +89,105 @@ fn invalid_or_mismatched_remote_paths_cannot_be_saved() {
 }
 
 #[test]
+fn raw_remote_catalog_switch_applies_config_and_catalog_together() {
+    let mut doc = Document::from_remote(snapshot()).unwrap();
+    let original = doc.config_snapshot().unwrap().to_owned();
+    let mut next = snapshot();
+    next.catalog_path = Some("/remote/user/.codex/nested/new.json".into());
+    next.catalog = Some(r#"{"models":[{"slug":"new-model"}]}"#.into());
+    doc.apply_remote_config_text(
+        "model_catalog_json='nested/new.json'\nmodel='new-model'\n# keep raw comment\n",
+        next,
+    )
+    .unwrap();
+    assert_eq!(doc.config.str_at(&["model"]).as_deref(), Some("new-model"));
+    assert!(doc.config_text().contains("# keep raw comment"));
+    assert_eq!(
+        doc.catalog.as_ref().unwrap()["models"][0]["slug"],
+        "new-model"
+    );
+    assert_eq!(doc.config_snapshot(), Some(original.as_str()));
+    assert!(doc.config_dirty());
+    assert!(!doc.catalog_dirty());
+    assert_eq!(
+        doc.remote_files().unwrap()[1].original.as_deref(),
+        Some(r#"{"models":[{"slug":"new-model"}]}"#)
+    );
+}
+
+#[test]
+fn failed_raw_remote_switch_leaves_both_documents_unchanged() {
+    for bad in [
+        "missing",
+        "invalid-json",
+        "changed-config",
+        "wrong-home",
+        "same-file",
+    ] {
+        let mut doc = Document::from_remote(snapshot()).unwrap();
+        let before = (
+            doc.config_text(),
+            doc.catalog_text(),
+            doc.catalog_path.clone(),
+        );
+        let mut next = snapshot();
+        next.catalog_path = Some("/remote/user/.codex/new.json".into());
+        match bad {
+            "missing" => next.catalog = None,
+            "invalid-json" => next.catalog = Some("not json".into()),
+            "changed-config" => next.config = Some("# external edit".into()),
+            "wrong-home" => next.home = "/other".into(),
+            "same-file" => next.catalog_path = Some("/remote/user/.codex/config.toml".into()),
+            _ => unreachable!(),
+        }
+        let text = if bad == "same-file" {
+            "model_catalog_json='config.toml'"
+        } else {
+            "model_catalog_json='new.json'"
+        };
+        assert!(doc.apply_remote_config_text(text, next).is_err());
+        assert_eq!(
+            (
+                doc.config_text(),
+                doc.catalog_text(),
+                doc.catalog_path.clone()
+            ),
+            before
+        );
+    }
+}
+
+#[test]
+fn raw_remote_catalog_removal_keeps_old_file_out_of_the_write_set() {
+    let mut doc = Document::from_remote(snapshot()).unwrap();
+    let mut next = snapshot();
+    next.catalog_path = None;
+    next.catalog = None;
+    doc.apply_remote_config_text("# use builtin catalog\n", next)
+        .unwrap();
+    assert!(doc.catalog_path.is_none());
+    assert!(doc.catalog.is_none());
+    assert_eq!(doc.remote_files().unwrap().len(), 1);
+}
+
+#[test]
+fn raw_remote_switch_cannot_discard_unsaved_models() {
+    let mut doc = Document::from_remote(snapshot()).unwrap();
+    doc.apply_catalog_text(r#"{"models":[{"slug":"keep-me"}]}"#)
+        .unwrap();
+    let mut next = snapshot();
+    next.catalog_path = Some("/remote/user/.codex/other.json".into());
+    assert!(
+        doc.apply_remote_config_text("model_catalog_json='other.json'", next)
+            .is_err()
+    );
+    assert_eq!(
+        doc.catalog.as_ref().unwrap()["models"][0]["slug"],
+        "keep-me"
+    );
+}
+
+#[test]
 fn destinations_cannot_inject_ssh_options_or_shell_commands() {
     for alias in ["dev", "prod-server", "my_box.2"] {
         assert!(valid_alias(alias));
@@ -140,6 +239,141 @@ mod helper {
 
     fn file(path: &Path, original: Option<&str>, text: &str, write: bool) -> Value {
         json!({"path":path, "original":original, "text":text, "write":write})
+    }
+
+    #[test]
+    fn remote_environment_reports_only_presence_and_rejects_invalid_names() {
+        let response = invoke(
+            json!({"operation":"env_status","names":[
+                "FIXTURE_REMOTE_KEY", "FIXTURE_REMOTE_EMPTY", "FIXTURE_REMOTE_MISSING", "FIXTURE_REMOTE_KEY"
+            ]}),
+            "import os\nos.environ['FIXTURE_REMOTE_KEY']='never-return-this-key'\nos.environ['FIXTURE_REMOTE_EMPTY']='  '\nos.environ.pop('FIXTURE_REMOTE_MISSING',None)",
+        );
+        let rows = response["result"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows[0],
+            json!({"name":"FIXTURE_REMOTE_EMPTY","is_set":false})
+        );
+        assert_eq!(rows[1], json!({"name":"FIXTURE_REMOTE_KEY","is_set":true}));
+        assert_eq!(
+            rows[2],
+            json!({"name":"FIXTURE_REMOTE_MISSING","is_set":false})
+        );
+        assert!(!response.to_string().contains("never-return-this-key"));
+        for names in [
+            json!([""]),
+            json!(["BAD=NAME"]),
+            json!(["BAD\0NAME"]),
+            json!(vec!["A"; 129]),
+        ] {
+            assert!(
+                invoke(json!({"operation":"env_status","names":names}), "")
+                    .get("error")
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn directory_browser_lists_metadata_and_never_follows_links_or_executes_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("中文 ' $(touch never)");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("models.json"), "private-file-content").unwrap();
+        fs::create_dir(folder.join("nested")).unwrap();
+        std::os::unix::fs::symlink("models.json", folder.join("linked.json")).unwrap();
+        let response = invoke(
+            json!({"operation":"browse","home":root.path(),"path":"中文 ' $(touch never)"}),
+            "",
+        );
+        assert!(response.get("error").is_none(), "{response}");
+        let listing: codex_config::remote::DirectoryListing =
+            serde_json::from_value(response["result"].clone()).unwrap();
+        assert_eq!(listing.path, folder.to_string_lossy());
+        assert_eq!(listing.parent.as_deref(), root.path().to_str());
+        assert_eq!(listing.entries[0].name, "nested");
+        assert_eq!(
+            listing.entries[0].kind,
+            codex_config::remote::PathKind::Directory
+        );
+        assert!(
+            listing
+                .entries
+                .iter()
+                .any(|entry| entry.name == "linked.json"
+                    && entry.kind == codex_config::remote::PathKind::Symlink)
+        );
+        assert!(!response.to_string().contains("private-file-content"));
+        assert!(!root.path().join("never").exists());
+        std::os::unix::fs::symlink(&folder, root.path().join("directory-link")).unwrap();
+        assert!(
+            invoke(
+                json!({"operation":"browse","home":root.path(),"path":"directory-link"}),
+                ""
+            )
+            .get("error")
+            .is_some()
+        );
+        assert!(
+            invoke(
+                json!({"operation":"browse","home":folder,"path":"models.json"}),
+                ""
+            )
+            .get("error")
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn remote_path_preflight_is_read_only_and_distinguishes_existing_targets() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("model.json"), "unchanged").unwrap();
+        fs::create_dir(root.path().join("folder")).unwrap();
+        std::os::unix::fs::symlink("missing", root.path().join("link")).unwrap();
+        for (path, kind) in [
+            ("new/nested.json", "missing"),
+            ("model.json", "file"),
+            ("folder", "directory"),
+            ("link", "symlink"),
+        ] {
+            let response = invoke(
+                json!({"operation":"stat_path","home":root.path(),"path":path}),
+                "",
+            );
+            assert_eq!(response["result"]["kind"], kind);
+            assert_eq!(
+                response["result"]["path"],
+                root.path().join(path).to_string_lossy().as_ref()
+            );
+        }
+        assert!(!root.path().join("new").exists());
+        assert_eq!(
+            fs::read_to_string(root.path().join("model.json")).unwrap(),
+            "unchanged"
+        );
+        assert!(
+            invoke(
+                json!({"operation":"stat_path","home":root.path(),"path":""}),
+                ""
+            )
+            .get("error")
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn remote_directory_listing_has_a_fixed_upper_bound() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..520 {
+            fs::write(root.path().join(format!("{index:04}.json")), "").unwrap();
+        }
+        let response = invoke(
+            json!({"operation":"browse","home":root.path(),"path":"."}),
+            "",
+        );
+        assert_eq!(response["result"]["entries"].as_array().unwrap().len(), 512);
+        assert_eq!(response["result"]["truncated"], true);
     }
 
     #[test]

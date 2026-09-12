@@ -111,4 +111,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run non-GUI regressions
-        run: cargo test --locked --lib --test document --test persistence --test validation --test editor_preservation --test catalog --test editors --test remote --test ssh_config
+        run: cargo test --locked --lib --test document --test persistence --test validation --test editor_preservation --test catalog --test editors --test remote --test remote_models --test ssh_config

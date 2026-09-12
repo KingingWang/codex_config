@@ -12,6 +12,7 @@ pub mod editors;
 pub mod net;
 pub mod page;
 pub mod remote;
+pub mod remote_browser;
 pub mod remote_ui;
 pub mod server;
 pub mod ssh_config;

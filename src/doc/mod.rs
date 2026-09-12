@@ -502,6 +502,40 @@ impl Document {
         Ok(())
     }
 
+    /// Apply a raw remote config only after a matching catalog snapshot is ready.
+    /// Failure leaves both the current config and catalog unchanged.
+    pub fn apply_remote_config_text(
+        &mut self,
+        text: &str,
+        snapshot: crate::remote::Snapshot,
+    ) -> Result<()> {
+        if !self.is_remote() || self.catalog_dirty() {
+            bail!("请先保存或放弃模型目录修改，再应用远程配置");
+        }
+        if snapshot.home != self.codex_home.to_string_lossy()
+            || Some(snapshot.user_home.as_str()) != self.remote_user_home.as_deref()
+            || snapshot.config.as_deref() != self.config_snapshot()
+        {
+            bail!("远程快照已变化或不属于当前配置，未应用源文件");
+        }
+        let mut next = self.clone();
+        next.config = text.parse::<DocumentMut>()?;
+        next.hydrate_remote_catalog(&snapshot)?;
+        if next.catalog_path.as_ref() == Some(&next.config_path) {
+            bail!("模型目录不能与 config.toml 使用同一个文件");
+        }
+        if next.catalog_path.is_some()
+            && !next
+                .catalog
+                .as_ref()
+                .is_some_and(|value| value.get("models").is_some_and(Value::is_array))
+        {
+            bail!("新模型目录不存在或不是有效的模型 JSON；请先选择或创建模型目录");
+        }
+        *self = next;
+        Ok(())
+    }
+
     /// Config first in the snapshot; the transport publishes catalog first.
     pub fn remote_files(&self) -> Result<Vec<crate::remote::RemoteFile>> {
         if !self.is_remote() {

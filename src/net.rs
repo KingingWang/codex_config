@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::doc::providers::ProviderView;
 use crate::doc::schema::WireApi;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct HttpOutcome {
     pub ok: bool,
     pub status: u16,

@@ -11,8 +11,10 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::doc::providers::ProviderView;
 use crate::doc::toml_ext::TomlPathExt;
 use crate::doc::{Document, SaveReport};
+use crate::net::{HttpOutcome, Probe};
 
 pub const HELPER: &str = include_str!("remote_helper.py");
 #[cfg(test)]
@@ -35,6 +37,43 @@ pub struct Snapshot {
     pub config: Option<String>,
     pub catalog_path: Option<String>,
     pub catalog: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EnvStatus {
+    pub name: String,
+    pub is_set: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PathKind {
+    Missing,
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PathStatus {
+    pub path: String,
+    pub kind: PathKind,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: PathKind,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DirectoryListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<DirectoryEntry>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -269,6 +308,135 @@ pub fn load(target: &SshTarget, cancel: &AtomicBool) -> Result<Document> {
     Document::from_remote(snapshot)
 }
 
+/// Fetch model IDs on the target host. Environment variable names, not their
+/// local values, travel over SSH stdin; the helper resolves credentials remotely.
+pub fn list_models(
+    target: &SshTarget,
+    provider: &ProviderView,
+    cancel: &AtomicBool,
+) -> Result<HttpOutcome> {
+    probe(target, provider, Probe::ListModels, None, cancel)
+}
+
+/// Run a provider probe remotely without resolving any local credentials.
+pub fn probe(
+    target: &SshTarget,
+    provider: &ProviderView,
+    kind: Probe,
+    model: Option<String>,
+    cancel: &AtomicBool,
+) -> Result<HttpOutcome> {
+    let mut payload = model_list_request(provider);
+    if kind == Probe::Chat {
+        payload["operation"] = json!("probe_chat");
+        payload["model"] = json!(model);
+    }
+    let outcome = request(target, payload, cancel)?;
+    serde_json::from_value(outcome).context("远端服务商响应格式不正确")
+}
+
+pub fn check_environment(
+    target: &SshTarget,
+    names: &[String],
+    cancel: &AtomicBool,
+) -> Result<Vec<EnvStatus>> {
+    serde_json::from_value(request(
+        target,
+        json!({"operation":"env_status", "names":names}),
+        cancel,
+    )?)
+    .context("远端环境变量状态格式不正确")
+}
+
+pub fn browse(target: &SshTarget, path: &str, cancel: &AtomicBool) -> Result<DirectoryListing> {
+    serde_json::from_value(request(
+        target,
+        json!({"operation":"browse", "home":target.home, "path":path}),
+        cancel,
+    )?)
+    .context("远端目录列表格式不正确")
+}
+
+pub fn stat_path(target: &SshTarget, path: &str, cancel: &AtomicBool) -> Result<PathStatus> {
+    serde_json::from_value(request(
+        target,
+        json!({"operation":"stat_path", "home":target.home, "path":path}),
+        cancel,
+    )?)
+    .context("远端文件状态格式不正确")
+}
+
+/// Preflight only. The final save still checks for files created after this check.
+pub fn create_catalog(
+    target: &SshTarget,
+    mut doc: Document,
+    filename: &str,
+    cancel: &AtomicBool,
+) -> Result<Document> {
+    doc.create_catalog(filename)?;
+    let path = doc
+        .catalog_path
+        .as_ref()
+        .context("没有模型目录路径")?
+        .to_string_lossy();
+    let status = stat_path(target, &path, cancel)?;
+    if status.path != path || status.kind != PathKind::Missing {
+        bail!("远程目标已经存在或不是可用的新文件路径，请换一个名字");
+    }
+    Ok(doc)
+}
+
+/// Apply a raw config atomically in memory; a changed catalog is loaded first.
+pub fn apply_config_text(
+    target: &SshTarget,
+    mut doc: Document,
+    text: &str,
+    cancel: &AtomicBool,
+) -> Result<Document> {
+    let parsed = text
+        .parse::<toml_edit::DocumentMut>()
+        .context("TOML 格式不正确")?;
+    let raw = parsed
+        .str_at(&["model_catalog_json"])
+        .filter(|value| !value.trim().is_empty());
+    let path = raw.as_ref().map(|raw| doc.resolve_against_home(raw));
+    if path == doc.catalog_path {
+        doc.apply_config_text(text)?;
+        return Ok(doc);
+    }
+    if doc.catalog_dirty() {
+        bail!("模型目录还有未保存的修改，请先保存或放弃再切换路径");
+    }
+    let snapshot: Snapshot = serde_json::from_value(request(
+        target,
+        json!({
+            "operation":"load", "home":doc.codex_home.to_string_lossy(), "catalog":raw,
+            "check_config":true, "expected_config":doc.config_snapshot(),
+        }),
+        cancel,
+    )?)?;
+    doc.apply_remote_config_text(text, snapshot)?;
+    Ok(doc)
+}
+
+fn model_list_request(provider: &ProviderView) -> Value {
+    json!({
+        "operation": "list_models",
+        "provider": {
+            "base_url": provider.base_url,
+            "wire_api": provider.wire_api,
+            "env_key": provider.env_key,
+            "bearer_token": provider.bearer_token,
+            "headers": provider.headers,
+            "query_params": provider.query_params,
+            "env_http_headers": provider.env_http_headers,
+            "requires_openai_auth": provider.requires_openai_auth,
+            "command_auth": provider.command_auth,
+            "aws_auth": provider.aws_auth,
+        },
+    })
+}
+
 pub fn switch_catalog(
     target: &SshTarget,
     mut doc: Document,
@@ -319,6 +487,11 @@ pub enum JobResult {
     Loaded(SshTarget, Document),
     Saved(Document, SaveReport),
     Catalog(Document),
+    Probed(String, Probe, HttpOutcome),
+    Environment(Vec<EnvStatus>),
+    Browsed(SshTarget, DirectoryListing),
+    CatalogCreated(Document),
+    ConfigApplied(Document),
 }
 
 pub struct Job {

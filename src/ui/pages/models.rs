@@ -124,14 +124,21 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
             .and_then(|d| d.config.str_at(&["model_provider"]))
             .filter(|p| !p.is_empty())
         {
-            let busy = app.probe.is_some();
+            let busy = app.probe.is_some() || app.ssh_busy();
             ui.add_enabled_ui(!busy, |ui| {
                 let label = if busy {
                     "正在拉取…".to_string()
                 } else {
                     format!("{} 从服务商拉取模型列表", icons::DOWNLOAD)
                 };
-                if widgets::ghost_button(ui, &label).clicked() {
+                if widgets::ghost_button(ui, &label)
+                    .on_hover_text(if app.is_remote() {
+                        "通过 SSH 在远端请求模型列表，环境变量密钥也在远端解析。"
+                    } else {
+                        "使用本机网络和服务商配置请求模型列表。"
+                    })
+                    .clicked()
+                {
                     app.start_probe(&provider, Probe::ListModels, None, ctx);
                 }
             });
