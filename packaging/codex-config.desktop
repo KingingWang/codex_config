@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Codex 配置助手
+Comment=A friendly GUI for editing the Codex CLI config
+Exec=codex-config
+Icon=codex-config
+Categories=Development;Utility;
+Terminal=false

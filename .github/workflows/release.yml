@@ -1,0 +1,196 @@
+name: Release
+
+# Build double-clickable GUI apps for macOS, Windows and Linux, then attach
+# them to a GitHub Release.
+#
+# Trigger:
+#   * push a tag like `v0.1.0`  -> builds + publishes a Release
+#   * manual "Run workflow"     -> builds + uploads artifacts (no Release)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- macOS
+  macos:
+    name: macOS (universal .dmg)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + both Apple targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (Apple Silicon + Intel)
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Assemble universal .app and .dmg
+        run: |
+          set -euxo pipefail
+          APP="Codex 配置助手.app"
+          MACOS="$APP/Contents/MacOS"
+          RES="$APP/Contents/Resources"
+          mkdir -p "$MACOS" "$RES"
+
+          # Fuse the two arch binaries into one universal binary.
+          lipo -create -output "$MACOS/codex-config" \
+            target/aarch64-apple-darwin/release/codex-config \
+            target/x86_64-apple-darwin/release/codex-config
+          chmod +x "$MACOS/codex-config"
+
+          cp assets/icon/icon.icns "$RES/icon.icns"
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$VERSION" = "$GITHUB_REF_NAME" ] && VERSION="0.0.0-dev"
+          sed 's/^ *//' > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Codex 配置助手</string>
+            <key>CFBundleDisplayName</key><string>Codex 配置助手</string>
+            <key>CFBundleIdentifier</key><string>com.kingingwang.codexconfig</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleExecutable</key><string>codex-config</string>
+            <key>CFBundleIconFile</key><string>icon</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>10.15</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          # Ad-hoc sign so Gatekeeper on the same machine class is less noisy.
+          codesign --force --deep --sign - "$APP" || true
+
+          hdiutil create -volname "Codex 配置助手" -srcfolder "$APP" \
+            -ov -format UDZO "codex-config-macos-universal.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: codex-config-macos-universal.dmg
+
+  # ---------------------------------------------------------------- Windows
+  windows:
+    name: Windows (.zip)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package .zip
+        shell: pwsh
+        run: |
+          $dir = "codex-config-windows"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item target/release/codex-config.exe "$dir/codex-config.exe"
+          Copy-Item README.md "$dir/README.md"
+          Compress-Archive -Path "$dir/*" -DestinationPath "codex-config-windows-x64.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: codex-config-windows-x64.zip
+
+  # ---------------------------------------------------------------- Linux
+  linux:
+    name: Linux (.AppImage)
+    # Build on the oldest supported runner so the glibc baseline is broad.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install GUI build/runtime deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libxkbcommon-dev libwayland-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-icccm4-dev libxcb-keysyms1-dev libssl-dev \
+            libfuse2 fuse
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Assemble AppDir and build AppImage
+        run: |
+          set -euxo pipefail
+          APPDIR=AppDir
+          mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" \
+                   "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+
+          cp target/release/codex-config "$APPDIR/usr/bin/codex-config"
+          cp packaging/codex-config.desktop "$APPDIR/usr/share/applications/codex-config.desktop"
+          cp packaging/codex-config.desktop "$APPDIR/codex-config.desktop"
+          cp assets/icon/icon-256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/codex-config.png"
+          cp assets/icon/icon-256.png "$APPDIR/codex-config.png"
+
+          sed 's/^ *//' > "$APPDIR/AppRun" <<'SH'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/codex-config" "$@"
+          SH
+          chmod +x "$APPDIR/AppRun"
+
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool "$APPDIR" codex-config-linux-x86_64.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: codex-config-linux-x86_64.AppImage
+
+  # ---------------------------------------------------------------- Release
+  release:
+    name: Publish GitHub Release
+    needs: [macos, windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create / update the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/macos-dmg/codex-config-macos-universal.dmg
+            dist/windows-zip/codex-config-windows-x64.zip
+            dist/linux-appimage/codex-config-linux-x86_64.AppImage
+          generate_release_notes: true
+          body: |
+            # Codex 配置助手 ${{ github.ref_name }}
+
+            双击即可运行的图形化 Codex 配置编辑器。请按你的系统下载:
+
+            | 系统 | 下载 | 使用方法 |
+            |------|------|----------|
+            | **macOS**（Intel + Apple Silicon 通用）| `codex-config-macos-universal.dmg` | 打开 dmg，把 App 拖进「应用程序」。首次打开若提示未验证开发者，右键点图标选「打开」。 |
+            | **Windows 10/11 (64 位)** | `codex-config-windows-x64.zip` | 解压后双击 `codex-config.exe`。SmartScreen 提示时点「更多信息 → 仍要运行」。 |
+            | **Linux (x86_64)** | `codex-config-linux-x86_64.AppImage` | `chmod +x` 后双击运行；已打包依赖，跨发行版可用。 |

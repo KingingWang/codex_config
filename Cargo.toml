@@ -31,11 +31,15 @@ similar = "3.2.0"
 ureq = { version = "3.4.1", features = ["json"] }
 egui-phosphor = "0.14.0"
 sysinfo = "0.39.6"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 egui_kittest = { version = "0.36.2", features = ["snapshot", "wgpu", "eframe"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 tempfile = "3"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = 2
