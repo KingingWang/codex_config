@@ -45,13 +45,21 @@ pub trait TomlPathExt {
 
 impl TomlPathExt for DocumentMut {
     fn item_at(&self, path: &[&str]) -> Option<&Item> {
-        descend_table(&self.as_table(), path)
+        let (first, rest) = path.split_first()?;
+        let mut item = self.as_table().get(first)?;
+        for key in rest {
+            item = item.get(*key)?;
+        }
+        Some(item)
     }
 
     fn item_at_mut(&mut self, path: &[&str]) -> Option<&mut Item> {
-        let (last, parents) = path.split_last()?;
-        let table = descend_table_mut(self.as_table_mut(), parents)?;
-        table.get_mut(*last)
+        let (first, rest) = path.split_first()?;
+        let mut item = self.as_table_mut().get_mut(first)?;
+        for key in rest {
+            item = item.get_mut(*key)?;
+        }
+        Some(item)
     }
 
     fn value_at(&self, path: &[&str]) -> Option<&Value> {
@@ -80,7 +88,7 @@ impl TomlPathExt for DocumentMut {
         if path.is_empty() {
             return self.as_table().iter().map(|(k, _)| k.to_string()).collect();
         }
-        match self.table_at(path) {
+        match self.item_at(path).and_then(Item::as_table_like) {
             Some(table) => table.iter().map(|(k, _)| k.to_string()).collect(),
             None => Vec::new(),
         }
@@ -111,8 +119,11 @@ impl TomlPathExt for DocumentMut {
         let Some((last, parents)) = path.split_last() else {
             return false;
         };
-        match descend_table_mut(self.as_table_mut(), parents) {
-            Some(table) => table.remove(*last).is_some(),
+        if parents.is_empty() {
+            return self.as_table_mut().remove(last).is_some();
+        }
+        match self.item_at_mut(parents).and_then(Item::as_table_like_mut) {
+            Some(table) => table.remove(last).is_some(),
             None => false,
         }
     }
@@ -160,17 +171,17 @@ impl TomlPathExt for DocumentMut {
 fn descend_table<'a>(mut table: &'a Table, path: &[&str]) -> Option<&'a Item> {
     let (last, parents) = path.split_last()?;
     for key in parents {
-        table = match table.get(*key)? {
+        table = match table.get(key)? {
             Item::Table(inner) => inner,
             _ => return None,
         };
     }
-    table.get(*last)
+    table.get(last)
 }
 
 fn descend_table_mut<'a>(mut table: &'a mut Table, path: &[&str]) -> Option<&'a mut Table> {
     for key in path {
-        table = match table.get_mut(*key)? {
+        table = match table.get_mut(key)? {
             Item::Table(inner) => inner,
             _ => return None,
         };
@@ -181,6 +192,13 @@ fn descend_table_mut<'a>(mut table: &'a mut Table, path: &[&str]) -> Option<&'a 
 fn ensure_table_chain<'a>(mut table: &'a mut Table, path: &[&str]) -> &'a mut Table {
     for key in path {
         let entry = table.entry(key).or_insert(Item::Table(Table::new()));
+        if matches!(entry, Item::Value(Value::InlineTable(_))) {
+            // Converting an inline table must retain all sibling/unknown keys.
+            let inline = std::mem::take(entry);
+            if let Ok(converted) = inline.into_table() {
+                *entry = Item::Table(converted);
+            }
+        }
         if !matches!(entry, Item::Table(_)) {
             // A scalar was in the way: replace it with a table.
             *entry = Item::Table(Table::new());
@@ -236,7 +254,7 @@ pub fn value_str_array(items: &[String]) -> Value {
 pub fn inline_table(pairs: &[(&str, String)]) -> Value {
     let mut table = InlineTable::new();
     for (key, value) in pairs {
-        table.insert(*key, Value::from(value.clone()).into());
+        table.insert(*key, Value::from(value.clone()));
     }
     Value::InlineTable(table)
 }
@@ -332,5 +350,25 @@ mod tests {
             text.contains("status_line = [\"model\", \"git-branch\"]"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn inline_tables_are_read_without_mutation_and_edits_keep_siblings() {
+        let original = "# notes\ntui = { theme = \"old\", animations = false }\nprofiles = { work = { model = \"demo\" } }\n";
+        let mut d: DocumentMut = original.parse().unwrap();
+        assert_eq!(d.str_at(&["tui", "theme"]).as_deref(), Some("old"));
+        assert_eq!(d.keys_at(&["profiles"]), ["work"]);
+        assert_eq!(
+            d.str_at(&["profiles", "work", "model"]).as_deref(),
+            Some("demo")
+        );
+        assert_eq!(d.to_string(), original);
+        d.set_value_at(&["tui", "theme"], value_str("new"));
+        assert_eq!(d.bool_at(&["tui", "animations"]), Some(false));
+        assert!(d.remove_at(&["profiles", "work", "model"]));
+        let reparsed: DocumentMut = d.to_string().parse().unwrap();
+        assert_eq!(reparsed.str_at(&["tui", "theme"]).as_deref(), Some("new"));
+        assert_eq!(reparsed.bool_at(&["tui", "animations"]), Some(false));
+        assert!(d.to_string().contains("# notes"));
     }
 }

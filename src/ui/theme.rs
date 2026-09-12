@@ -1,90 +1,35 @@
-//! The look of the app: warm, approachable light theme with botanical green accents.
-//! Designed for beginners: clear hierarchy, generous spacing, and gentle colors.
+//! Charcoal workbench: neutral dark surfaces and restrained blue accents.
+//! Shared tokens for every page, dialog and editor (see DESIGN.md).
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Margin, Stroke, Style,
     TextStyle, Visuals,
 };
 
-// -- Primary palette: botanical green on warm paper -------------------------
-
-/// Warm paper background - the canvas everything sits on.
-pub const BG: Color32 = Color32::from_rgb(0xF5, 0xF6, 0xF2);
-
-/// Slightly darker panel/sidebar background.
-pub const PANEL: Color32 = Color32::from_rgb(0xFC, 0xFC, 0xF9);
-
-/// White card surfaces for content areas.
-pub const CARD: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
-
-/// Slightly off-white for alternating rows or subtle differentiation.
-pub const CARD_ALT: Color32 = Color32::from_rgb(0xF2, 0xF5, 0xF1);
-
-/// Input field backgrounds - a touch warmer than pure white.
-pub const INPUT_BG: Color32 = Color32::from_rgb(0xFE, 0xFE, 0xFE);
-
-/// Subtle borders that don't shout.
-pub const BORDER: Color32 = Color32::from_rgb(0xE0, 0xE6, 0xDE);
-
-/// Stronger borders for focus/active states.
-pub const BORDER_STRONG: Color32 = Color32::from_rgb(0xD0, 0xD5, 0xDA);
-
-// -- Text colors: ink on paper ----------------------------------------------
-
-/// Primary text - deep ink.
-pub const TEXT: Color32 = Color32::from_rgb(0x24, 0x3A, 0x35);
-
-/// Secondary text - slightly lighter ink.
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0x55, 0x68, 0x61);
-
-/// Muted text for hints and metadata.
-pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x69, 0x76, 0x6F);
-
-// -- Accent: botanical green ------------------------------------------------
-
-/// Primary accent - rich botanical green.
-pub const ACCENT: Color32 = Color32::from_rgb(0x26, 0x71, 0x5B);
-
-/// Hover/active accent - slightly brighter.
-pub const ACCENT_HI: Color32 = Color32::from_rgb(0x1C, 0x60, 0x4D);
-
-/// Weak accent for backgrounds.
-pub const ACCENT_WEAK: Color32 = Color32::from_rgb(0xE8, 0xF0, 0xE7);
-
-/// Accent text on dark backgrounds.
-pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0x26, 0x67, 0x51);
-
-/// Pale sage for selections.
-pub const SAGE: Color32 = Color32::from_rgb(0xD4, 0xED, 0xE4);
-
-/// Pale sage selection background.
-pub const SAGE_WEAK: Color32 = Color32::from_rgb(0xE8, 0xF7, 0xEE);
-
-// -- Semantic colors: gentle but clear --------------------------------------
-
-/// Success/OK - soft green.
-pub const OK: Color32 = ACCENT;
-
-/// OK background tint.
-pub const OK_WEAK: Color32 = Color32::from_rgb(0xE8, 0xF8, 0xF3);
-
-/// Warning - amber, not harsh yellow.
-pub const WARN: Color32 = Color32::from_rgb(0x92, 0x60, 0x18);
-
-/// Warning background tint.
-pub const WARN_WEAK: Color32 = Color32::from_rgb(0xFF, 0xF3, 0xE0);
-
-/// Danger/error - calm red, not screaming.
-pub const DANGER: Color32 = Color32::from_rgb(0xB3, 0x41, 0x3D);
-
-/// Danger background tint.
-pub const DANGER_WEAK: Color32 = Color32::from_rgb(0xFD, 0xEB, 0xEB);
-
-/// Info - soft blue-green.
-pub const INFO: Color32 = Color32::from_rgb(0x3A, 0x8E, 0xD4);
-
-/// Info background tint.
-pub const INFO_WEAK: Color32 = Color32::from_rgb(0xE8, 0xF2, 0xFC);
+pub const BG: Color32 = Color32::from_rgb(0x11, 0x13, 0x18);
+pub const PANEL: Color32 = Color32::from_rgb(0x15, 0x18, 0x1E);
+pub const CARD: Color32 = Color32::from_rgb(0x1C, 0x20, 0x28);
+pub const CARD_ALT: Color32 = Color32::from_rgb(0x23, 0x28, 0x32);
+pub const INPUT_BG: Color32 = Color32::from_rgb(0x12, 0x15, 0x1B);
+pub const BORDER: Color32 = Color32::from_rgb(0x30, 0x37, 0x44);
+pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x49, 0x55, 0x69);
+pub const TEXT: Color32 = Color32::from_rgb(0xE7, 0xEB, 0xF2);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0xB5, 0xBE, 0xCC);
+pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x9B, 0xA6, 0xB8);
+pub const ACCENT: Color32 = Color32::from_rgb(0x71, 0x9D, 0xF4);
+pub const ACCENT_HI: Color32 = Color32::from_rgb(0xA4, 0xC2, 0xFF);
+pub const ACCENT_WEAK: Color32 = Color32::from_rgb(0x24, 0x32, 0x4B);
+pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0xBD, 0xD2, 0xFF);
+pub const SELECTION: Color32 = Color32::from_rgb(0x38, 0x4D, 0x70);
+pub const SELECTION_WEAK: Color32 = Color32::from_rgb(0x29, 0x34, 0x47);
+pub const OK: Color32 = Color32::from_rgb(0x83, 0xC4, 0xA3);
+pub const OK_WEAK: Color32 = Color32::from_rgb(0x20, 0x32, 0x2E);
+pub const WARN: Color32 = Color32::from_rgb(0xEF, 0xBF, 0x72);
+pub const WARN_WEAK: Color32 = Color32::from_rgb(0x38, 0x2E, 0x22);
+pub const DANGER: Color32 = Color32::from_rgb(0xF0, 0x92, 0x98);
+pub const DANGER_WEAK: Color32 = Color32::from_rgb(0x3C, 0x27, 0x2E);
+pub const INFO: Color32 = ACCENT;
+pub const INFO_WEAK: Color32 = ACCENT_WEAK;
 
 // -- Fonts ------------------------------------------------------------------
 
@@ -166,8 +111,8 @@ pub fn install(ctx: &egui::Context) -> Option<String> {
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
     ctx.set_fonts(fonts);
-    ctx.options_mut(|options| options.theme_preference = egui::ThemePreference::Light);
-    ctx.set_style_of(egui::Theme::Light, style());
+    ctx.options_mut(|options| options.theme_preference = egui::ThemePreference::Dark);
+    ctx.set_style_of(egui::Theme::Dark, style());
     loaded
 }
 
@@ -187,37 +132,14 @@ fn first_readable(candidates: &[&str]) -> Option<(String, Vec<u8>)> {
 }
 
 pub fn style() -> Style {
-    let mut style = Style::default();
-
-    // Typography: clear hierarchy with generous sizing
-    style.text_styles = [
-        (TextStyle::Heading, egui::FontId::proportional(26.0)), // Large headings
-        (TextStyle::Body, egui::FontId::proportional(15.0)),    // Body text
-        (TextStyle::Monospace, egui::FontId::monospace(13.5)),  // Code/IDs
-        (TextStyle::Button, egui::FontId::proportional(14.5)),  // Button text
-        (TextStyle::Small, egui::FontId::proportional(13.0)),   // Small text
-    ]
-    .into();
-
-    // Spacing: 8pt rhythm, generous padding
-    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
-    style.spacing.button_padding = egui::vec2(12.0, 8.0);
-    style.spacing.interact_size = egui::vec2(120.0, 36.0);
-    style.spacing.combo_width = 100.0;
-    style.spacing.scroll = egui::style::ScrollStyle {
-        bar_width: 10.0,
-        ..Default::default()
-    };
-    style.spacing.window_margin = Margin::same(16);
-
-    let mut visuals = Visuals::light();
+    let mut visuals = Visuals::dark();
     visuals.panel_fill = BG;
     visuals.window_fill = CARD;
     visuals.extreme_bg_color = INPUT_BG;
     visuals.faint_bg_color = CARD_ALT;
-    visuals.dark_mode = false;
+    visuals.dark_mode = true;
     visuals.hyperlink_color = ACCENT_HI;
-    visuals.selection.bg_fill = SAGE_WEAK;
+    visuals.selection.bg_fill = SELECTION;
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
     visuals.window_corner_radius = CornerRadius::same(16);
     visuals.menu_corner_radius = CornerRadius::same(12);
@@ -251,8 +173,8 @@ pub fn style() -> Style {
     visuals.widgets.inactive.corner_radius = CornerRadius::same(10);
     visuals.widgets.inactive.expansion = 0.0;
 
-    visuals.widgets.hovered.bg_fill = SAGE_WEAK;
-    visuals.widgets.hovered.weak_bg_fill = SAGE_WEAK;
+    visuals.widgets.hovered.bg_fill = SELECTION_WEAK;
+    visuals.widgets.hovered.weak_bg_fill = SELECTION_WEAK;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.25, TEXT);
     visuals.widgets.hovered.corner_radius = CornerRadius::same(10);
@@ -271,11 +193,33 @@ pub fn style() -> Style {
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, TEXT);
     visuals.widgets.open.corner_radius = CornerRadius::same(10);
 
-    style.visuals = visuals;
-    style
+    Style {
+        text_styles: [
+            (TextStyle::Heading, egui::FontId::proportional(26.0)), // Large headings
+            (TextStyle::Body, egui::FontId::proportional(15.0)),    // Body text
+            (TextStyle::Monospace, egui::FontId::monospace(13.5)),  // Code/IDs
+            (TextStyle::Button, egui::FontId::proportional(14.5)),  // Button text
+            (TextStyle::Small, egui::FontId::proportional(13.0)),   // Small text
+        ]
+        .into(),
+        spacing: egui::Spacing {
+            item_spacing: egui::vec2(10.0, 10.0),
+            button_padding: egui::vec2(12.0, 8.0),
+            interact_size: egui::vec2(120.0, 36.0),
+            combo_width: 100.0,
+            scroll: egui::style::ScrollStyle {
+                bar_width: 10.0,
+                ..Default::default()
+            },
+            window_margin: Margin::same(16),
+            ..Default::default()
+        },
+        visuals,
+        ..Default::default()
+    }
 }
 
-/// Frame used for content "cards" - white surface with subtle border.
+/// Raised dark content surface with a subtle border.
 pub fn card_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(CARD)

@@ -6,10 +6,10 @@
 use serde_json::{Value, json};
 
 use crate::doc::catalog;
+use crate::doc::providers as providers_mod;
 use crate::doc::providers::{self, ProviderView};
 use crate::doc::schema::WireApi;
 use crate::doc::toml_ext::TomlPathExt;
-use crate::doc::providers as providers_mod;
 use toml_edit::{DocumentMut, Value as TomlValue};
 
 fn num_str(value: Option<i64>) -> String {
@@ -84,6 +84,18 @@ pub struct ModelEditor {
 }
 
 impl ModelEditor {
+    pub fn numeric_error(&self) -> Option<String> {
+        [
+            ("priority", &self.priority),
+            ("context_window", &self.context_window),
+            ("max_context_window", &self.max_context_window),
+            ("auto_compact_token_limit", &self.auto_compact_token_limit),
+            ("truncation_policy.limit", &self.truncation_limit),
+        ]
+        .into_iter()
+        .find_map(|(key, value)| invalid_integer(key, value))
+    }
+
     pub fn from_value(model: &Value) -> Self {
         let get = |key: &str| model.get(key).cloned().unwrap_or(Value::Null);
         Self {
@@ -119,7 +131,10 @@ impl ModelEditor {
             tool_mode: opt_str(model, "tool_mode"),
             context_window: num_str(catalog::i64_at(model, &["context_window"])),
             max_context_window: num_str(catalog::i64_at(model, &["max_context_window"])),
-            auto_compact_token_limit: num_str(catalog::i64_at(model, &["auto_compact_token_limit"])),
+            auto_compact_token_limit: num_str(catalog::i64_at(
+                model,
+                &["auto_compact_token_limit"],
+            )),
             truncation_mode: catalog::str_at(model, &["truncation_policy", "mode"])
                 .unwrap_or_else(|| "tokens".into()),
             truncation_limit: num_str(catalog::i64_at(model, &["truncation_policy", "limit"])),
@@ -133,18 +148,28 @@ impl ModelEditor {
             },
             support_verbosity: catalog::bool_at(model, &["support_verbosity"]).unwrap_or(false),
             default_verbosity: opt_str(model, "default_verbosity"),
-            supports_parallel_tool_calls: catalog::bool_at(model, &["supports_parallel_tool_calls"])
-                .unwrap_or(true),
-            supports_image_detail_original: catalog::bool_at(model, &["supports_image_detail_original"])
-                .unwrap_or(false),
+            supports_parallel_tool_calls: catalog::bool_at(
+                model,
+                &["supports_parallel_tool_calls"],
+            )
+            .unwrap_or(true),
+            supports_image_detail_original: catalog::bool_at(
+                model,
+                &["supports_image_detail_original"],
+            )
+            .unwrap_or(false),
             use_responses_lite: catalog::bool_at(model, &["use_responses_lite"]).unwrap_or(false),
-            include_skills_usage_instructions: catalog::bool_at(model, &["include_skills_usage_instructions"])
-                .unwrap_or(false),
+            include_skills_usage_instructions: catalog::bool_at(
+                model,
+                &["include_skills_usage_instructions"],
+            )
+            .unwrap_or(false),
             prefer_websockets: catalog::bool_at(model, &["prefer_websockets"]).unwrap_or(false),
             supported_in_api: catalog::bool_at(model, &["supported_in_api"]).unwrap_or(true),
             comp_hash: opt_str(model, "comp_hash"),
             auto_review_model_override: opt_str(model, "auto_review_model_override"),
-            nux_message: catalog::str_at(model, &["availability_nux", "message"]).unwrap_or_default(),
+            nux_message: catalog::str_at(model, &["availability_nux", "message"])
+                .unwrap_or_default(),
             base_instructions: opt_str(model, "base_instructions"),
             open_advanced: false,
             open_json: false,
@@ -153,9 +178,42 @@ impl ModelEditor {
 
     /// Write the buffer back into a catalog entry, leaving unknown fields alone.
     pub fn write_to(&self, model: &mut Value) {
+        if !model.is_object() || self.numeric_error().is_some() {
+            return;
+        }
+        // Compare editor-normalized snapshots so untouched optional/default
+        // fields, custom reasoning descriptions and whitespace stay exact.
+        let mut before = model.clone();
+        Self::from_value(model).write_fields(&mut before);
+        let mut after = model.clone();
+        self.write_fields(&mut after);
+        let keys = before
+            .as_object()
+            .into_iter()
+            .flat_map(|m| m.keys())
+            .chain(after.as_object().into_iter().flat_map(|m| m.keys()))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        for key in keys {
+            if before.get(&key) != after.get(&key) {
+                match after.get(&key) {
+                    Some(value) => catalog::set(model, &[&key], value.clone()),
+                    None => {
+                        catalog::remove(model, &[&key]);
+                    }
+                }
+            }
+        }
+    }
+
+    fn write_fields(&self, model: &mut Value) {
         set_or_remove_str(model, "slug", &self.slug);
         if self.display_name.trim().is_empty() {
-            catalog::set(model, &["display_name"], Value::String(self.slug.trim().to_string()));
+            catalog::set(
+                model,
+                &["display_name"],
+                Value::String(self.slug.trim().to_string()),
+            );
         } else {
             set_or_remove_str(model, "display_name", &self.display_name);
         }
@@ -169,14 +227,22 @@ impl ModelEditor {
         set_or_remove_str(model, "tool_mode", &self.tool_mode);
         set_or_remove_int(model, "context_window", &self.context_window);
         set_or_remove_int(model, "max_context_window", &self.max_context_window);
-        set_or_remove_int(model, "auto_compact_token_limit", &self.auto_compact_token_limit);
+        set_or_remove_int(
+            model,
+            "auto_compact_token_limit",
+            &self.auto_compact_token_limit,
+        );
 
         let mode = if self.truncation_mode.is_empty() {
             "tokens"
         } else {
             self.truncation_mode.as_str()
         };
-        catalog::set(model, &["truncation_policy", "mode"], Value::String(mode.to_string()));
+        catalog::set(
+            model,
+            &["truncation_policy", "mode"],
+            Value::String(mode.to_string()),
+        );
         match crate::ui::widgets::parse_opt_int(&self.truncation_limit) {
             Some(limit) => catalog::set(model, &["truncation_policy", "limit"], json!(limit)),
             None => {
@@ -195,8 +261,16 @@ impl ModelEditor {
             ),
         );
         catalog::set_reasoning_levels(model, &self.supported_reasoning_levels);
-        set_or_remove_str(model, "default_reasoning_level", &self.default_reasoning_level);
-        set_or_remove_str(model, "default_reasoning_summary", &self.default_reasoning_summary);
+        set_or_remove_str(
+            model,
+            "default_reasoning_level",
+            &self.default_reasoning_level,
+        );
+        set_or_remove_str(
+            model,
+            "default_reasoning_summary",
+            &self.default_reasoning_summary,
+        );
         catalog::set(model, &["support_verbosity"], json!(self.support_verbosity));
         set_or_remove_str(model, "default_verbosity", &self.default_verbosity);
         catalog::set(
@@ -209,7 +283,11 @@ impl ModelEditor {
             &["supports_image_detail_original"],
             json!(self.supports_image_detail_original),
         );
-        catalog::set(model, &["use_responses_lite"], json!(self.use_responses_lite));
+        catalog::set(
+            model,
+            &["use_responses_lite"],
+            json!(self.use_responses_lite),
+        );
         catalog::set(
             model,
             &["include_skills_usage_instructions"],
@@ -218,7 +296,11 @@ impl ModelEditor {
         catalog::set(model, &["prefer_websockets"], json!(self.prefer_websockets));
         catalog::set(model, &["supported_in_api"], json!(self.supported_in_api));
         set_or_remove_str(model, "comp_hash", &self.comp_hash);
-        set_or_remove_str(model, "auto_review_model_override", &self.auto_review_model_override);
+        set_or_remove_str(
+            model,
+            "auto_review_model_override",
+            &self.auto_review_model_override,
+        );
 
         if self.nux_message.trim().is_empty() {
             catalog::remove(model, &["availability_nux"]);
@@ -239,7 +321,9 @@ impl ModelEditor {
         if slug.is_empty() {
             problems.push("slug（模型标识）不能为空，Codex 用它来找到这个模型。".into());
         } else if slug.contains(char::is_whitespace) {
-            problems.push("slug 里不能有空格，建议用小写字母、数字、点和短横线，例如 gpt-5.2-codex。".into());
+            problems.push(
+                "slug 里不能有空格，建议用小写字母、数字、点和短横线，例如 gpt-5.2-codex。".into(),
+            );
         }
         if !self.context_window.is_empty()
             && crate::ui::widgets::parse_opt_int(&self.context_window).is_none()
@@ -251,8 +335,7 @@ impl ModelEditor {
         } else if !self.default_reasoning_level.is_empty()
             && !self
                 .supported_reasoning_levels
-                .iter()
-                .any(|level| *level == self.default_reasoning_level)
+                .contains(&self.default_reasoning_level)
         {
             problems.push("默认推理强度不在已勾选的档位里。".into());
         }
@@ -273,7 +356,12 @@ pub enum AuthMode {
 }
 
 impl AuthMode {
-    pub const ALL: [AuthMode; 4] = [AuthMode::EnvKey, AuthMode::Bearer, AuthMode::CodexLogin, AuthMode::None];
+    pub const ALL: [AuthMode; 4] = [
+        AuthMode::EnvKey,
+        AuthMode::Bearer,
+        AuthMode::CodexLogin,
+        AuthMode::None,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -323,6 +411,16 @@ pub struct ProviderEditor {
 }
 
 impl ProviderEditor {
+    pub fn numeric_error(&self) -> Option<String> {
+        [
+            ("request_max_retries", &self.request_max_retries),
+            ("stream_max_retries", &self.stream_max_retries),
+            ("stream_idle_timeout_ms", &self.stream_idle_timeout_ms),
+        ]
+        .into_iter()
+        .find_map(|(key, value)| invalid_integer(key, value))
+    }
+
     pub fn from_view(view: &ProviderView) -> Self {
         let auth_mode = if !view.env_key.is_empty() {
             AuthMode::EnvKey
@@ -395,6 +493,41 @@ impl ProviderEditor {
     }
 
     pub fn write_to(&self, config: &mut DocumentMut) {
+        if self.numeric_error().is_some() {
+            return;
+        }
+        let Some(view) = providers::view(config, &self.id) else {
+            self.write_fields(config);
+            return;
+        };
+        let original_editor = Self::from_view(&view);
+        let mut before = config.clone();
+        original_editor.write_fields(&mut before);
+        let mut after = config.clone();
+        self.write_fields(&mut after);
+        let keys = before
+            .keys_at(&["model_providers", &self.id])
+            .into_iter()
+            .chain(after.keys_at(&["model_providers", &self.id]))
+            .collect::<std::collections::BTreeSet<_>>();
+        for key in keys {
+            let path = ["model_providers", &self.id, &key];
+            if before.raw_at(&path) != after.raw_at(&path) {
+                match after.item_at(&path) {
+                    Some(item) => config.set_item_at(&path, item.clone()),
+                    None => {
+                        config.remove_at(&path);
+                    }
+                }
+            }
+        }
+        // An explicit switch to a supported auth method replaces command auth.
+        if self.auth_mode != original_editor.auth_mode {
+            config.remove_at(&["model_providers", &self.id, "auth"]);
+        }
+    }
+
+    fn write_fields(&self, config: &mut DocumentMut) {
         let id = self.id.clone();
         providers_mod::create(config, &id);
         providers::set_str(config, &id, "name", &self.name);
@@ -405,7 +538,12 @@ impl ProviderEditor {
         match self.auth_mode {
             AuthMode::EnvKey => {
                 providers::set_str(config, &id, "env_key", &self.env_key);
-                providers::set_str(config, &id, "env_key_instructions", &self.env_key_instructions);
+                providers::set_str(
+                    config,
+                    &id,
+                    "env_key_instructions",
+                    &self.env_key_instructions,
+                );
                 config.remove_at(&["model_providers", &id, "experimental_bearer_token"]);
                 providers::set_bool(config, &id, "requires_openai_auth", false);
             }
@@ -462,12 +600,26 @@ impl ProviderEditor {
             problems.push("base_url 需要以 http:// 或 https:// 开头。".into());
         }
         if self.auth_mode == AuthMode::EnvKey && self.env_key.trim().is_empty() {
-            problems.push("选择了「从环境变量读取」，但还没有填变量名（例如 OPENAI_API_KEY）。".into());
+            problems
+                .push("选择了「从环境变量读取」，但还没有填变量名（例如 OPENAI_API_KEY）。".into());
         }
         if self.auth_mode == AuthMode::Bearer && self.bearer.trim().is_empty() {
             problems.push("选择了「直接写在配置文件里」，但 Token 是空的。".into());
         }
         problems
+    }
+}
+
+fn invalid_integer(key: &str, buffer: &str) -> Option<String> {
+    if buffer.trim().is_empty() {
+        return None;
+    }
+    match crate::ui::widgets::parse_opt_int(buffer) {
+        Some(value) if key == "priority" && i32::try_from(value).is_ok() => None,
+        Some(value) if key != "priority" && value >= 0 => None,
+        _ => Some(format!(
+            "{key} 需要有效整数（priority 允许负数，其余字段不能为负），请修正后再保存。"
+        )),
     }
 }
 

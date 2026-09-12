@@ -66,6 +66,7 @@ pub struct ProbeState {
 }
 
 pub struct App {
+    pub remote: crate::remote_ui::RemoteUi,
     pub doc: Option<Document>,
     pub load_error: Option<String>,
     pub page: Page,
@@ -96,6 +97,8 @@ pub struct App {
     pub raw_buffer: String,
     pub raw_source: String,
     pub raw_origin: String,
+    pub model_input_error: Option<String>,
+    pub provider_input_error: Option<String>,
 
     // restart app-server flow
     pub restart_scan: Vec<ServerInstance>,
@@ -120,6 +123,7 @@ impl App {
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point().max(1.0));
 
         let mut app = Self {
+            remote: crate::remote_ui::RemoteUi::new(cc.egui_ctx.clone(), &home),
             doc: None,
             load_error: None,
             page: Page::Overview,
@@ -145,6 +149,8 @@ impl App {
             raw_buffer: String::new(),
             raw_source: String::new(),
             raw_origin: String::new(),
+            model_input_error: None,
+            provider_input_error: None,
             restart_scan: Vec::new(),
             restart_selected: Vec::new(),
             restart_results: Vec::new(),
@@ -159,11 +165,20 @@ impl App {
     // -- document lifecycle -------------------------------------------------
 
     pub fn load(&mut self, home: PathBuf) {
+        if self.ssh_busy() {
+            return;
+        }
         match Document::load(home) {
             Ok(doc) => {
                 self.reset_editors();
                 let notes = doc.load_notes.clone();
                 let path = doc.config_path.display().to_string();
+                self.remote.local_home = doc.codex_home.display().to_string();
+                self.remote.target = None;
+                self.remote.error = None;
+                self.saved_needs_restart = false;
+                self.last_outcome = None;
+                self.show_diff = false;
                 self.doc = Some(doc);
                 self.load_error = None;
                 self.toasts
@@ -176,8 +191,13 @@ impl App {
                 }
             }
             Err(err) => {
-                self.doc = None;
-                self.load_error = Some(format!("{err:#}"));
+                if self.doc.is_some() {
+                    self.remote.error = Some(format!("载入失败，已保留当前修改：{err:#}"));
+                    self.toast_error(format!("载入失败，已保留当前修改：{err:#}"));
+                } else {
+                    self.load_error = Some(format!("{err:#}"));
+                }
+                return;
             }
         }
         self.raw_buffer.clear();
@@ -185,6 +205,8 @@ impl App {
     }
 
     pub fn reset_editors(&mut self) {
+        self.model_input_error = None;
+        self.provider_input_error = None;
         self.editing_model = None;
         self.model_editor = ModelEditor::default();
         self.editing_provider = None;
@@ -197,6 +219,10 @@ impl App {
 
     pub fn select_model(&mut self, index: usize) {
         if self.editing_model == Some(index) {
+            return;
+        }
+        if let Some(error) = &self.model_input_error {
+            self.toast_error(error.clone());
             return;
         }
         let Some(doc) = &self.doc else { return };
@@ -214,6 +240,10 @@ impl App {
 
     pub fn select_provider(&mut self, id: &str) {
         if self.editing_provider.as_deref() == Some(id) && self.provider_editor.is_some() {
+            return;
+        }
+        if let Some(error) = &self.provider_input_error {
+            self.toast_error(error.clone());
             return;
         }
         let Some(doc) = &self.doc else { return };
@@ -238,6 +268,10 @@ impl App {
             return;
         };
         let editor = self.model_editor.clone();
+        self.model_input_error = editor.numeric_error();
+        if self.model_input_error.is_some() {
+            return;
+        }
         if let Some(doc) = &mut self.doc
             && let Some(list) = doc
                 .catalog
@@ -253,6 +287,10 @@ impl App {
         let Some(editor) = self.provider_editor.clone() else {
             return;
         };
+        self.provider_input_error = editor.numeric_error();
+        if self.provider_input_error.is_some() {
+            return;
+        }
         if let Some(doc) = &mut self.doc {
             editor.write_to(&mut doc.config);
         }
@@ -277,6 +315,19 @@ impl App {
     }
 
     pub fn save(&mut self) {
+        if self.ssh_busy() {
+            return;
+        }
+        if let Some(error) = self.model_input_error.clone() {
+            self.toast_error(error);
+            self.page = Page::Models;
+            return;
+        }
+        if let Some(error) = self.provider_input_error.clone() {
+            self.toast_error(error);
+            self.page = Page::Providers;
+            return;
+        }
         if self.has_raw_draft() {
             self.toast_error("源文件还有未应用的内容，请先「应用到编辑器」，再保存配置。");
             self.page = Page::Raw;
@@ -297,6 +348,10 @@ impl App {
                 ))
                 .duration(Some(std::time::Duration::from_secs(8)));
             self.page = first.page;
+            return;
+        }
+        if self.is_remote() {
+            self.start_remote_save();
             return;
         }
         let Some(doc) = &mut self.doc else { return };
@@ -326,6 +381,18 @@ impl App {
     }
 
     pub fn discard(&mut self) {
+        if self.ssh_busy() {
+            return;
+        }
+        if self.is_remote() {
+            let Some(target) = self.remote.target.clone() else {
+                self.toast_error("远程目标未绑定，请通过「切换环境」重新连接。");
+                return;
+            };
+            self.remote.discard_confirmed = true;
+            self.connect_remote(target);
+            return;
+        }
         if let Some(doc) = &mut self.doc {
             let home = doc.codex_home.clone();
             self.load(home);
@@ -340,7 +407,10 @@ impl App {
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
-        self.has_raw_draft() || self.doc.as_ref().is_some_and(Document::dirty)
+        self.has_raw_draft()
+            || self.model_input_error.is_some()
+            || self.provider_input_error.is_some()
+            || self.doc.as_ref().is_some_and(Document::dirty)
     }
 
     pub fn request_discard(&mut self) {
@@ -365,6 +435,10 @@ impl App {
 
     /// Open the "restart app-server" dialog and kick off a fresh scan.
     pub fn open_restart_dialog(&mut self) {
+        if self.is_remote() || self.ssh_busy() {
+            self.toast_info("远程配置保存后，请在目标机器重启 Codex；本工具不会重启本地服务。");
+            return;
+        }
         self.rescan_servers();
         self.restart_results.clear();
         self.dialog = Some(Dialog::RestartServers);
@@ -373,6 +447,9 @@ impl App {
     /// Re-scan running app-server processes and default the selection to every
     /// instance we are allowed to restart (i.e. not the one hosting us).
     pub fn rescan_servers(&mut self) {
+        if self.is_remote() || self.ssh_busy() {
+            return;
+        }
         let found = server::scan();
         self.restart_selected = found.iter().map(|i| !i.is_our_host).collect();
         self.restart_scan = found;
@@ -381,6 +458,9 @@ impl App {
 
     /// Restart every checked instance.
     pub fn run_restart_selected(&mut self) {
+        if self.is_remote() || self.ssh_busy() {
+            return;
+        }
         let mut results = Vec::new();
         let mut restarted = 0usize;
         for (inst, checked) in self.restart_scan.iter().zip(self.restart_selected.iter()) {
@@ -406,6 +486,11 @@ impl App {
     }
 
     pub fn open_in_editor(&mut self, path: PathBuf) {
+        if self.is_remote() {
+            self.page = Page::Raw;
+            self.toast_info("远程文件请在「源文件编辑」查看；不会打开本地同名路径。");
+            return;
+        }
         if let Err(err) = open::that(&path) {
             self.toast_error(format!("无法用系统默认程序打开：{err}"));
         }
@@ -418,6 +503,10 @@ impl App {
         model: Option<String>,
         ctx: &Context,
     ) {
+        if self.is_remote() || self.ssh_busy() {
+            self.toast_info("远程模式不从本机发起服务商测试或读取本机密钥。请在目标机器验证连接。");
+            return;
+        }
         let Some(doc) = &self.doc else { return };
         let Some(view) = provider_ops::view(&doc.config, provider_id) else {
             self.toast_error("找不到这个服务商，先保存一次再试");
@@ -475,8 +564,8 @@ impl App {
         let doc = self.doc.as_ref()?;
         if let Some(catalog) = &doc.catalog {
             let active = doc.config.str_at(&["model"]).unwrap_or_default();
-            if let Some(list) = catalog::models(catalog) {
-                if let Some(model) = list
+            if let Some(list) = catalog::models(catalog)
+                && let Some(model) = list
                     .iter()
                     .find(|m| {
                         m.get("slug").and_then(serde_json::Value::as_str) == Some(active.as_str())
@@ -487,12 +576,11 @@ impl App {
                                 == Some(provider_id)
                         })
                     })
-                {
-                    return model
-                        .get("slug")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string);
-                }
+            {
+                return model
+                    .get("slug")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
             }
         }
         None
@@ -504,7 +592,12 @@ use crate::doc::toml_ext::TomlPathExt;
 impl eframe::App for App {
     fn ui(&mut self, root: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
+        self.poll_ssh();
+        if self.ssh_busy() && ctx.input(|input| input.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
         if ctx.input(|input| input.viewport().close_requested())
+            && !self.ssh_busy()
             && self.has_unsaved_changes()
             && !self.close_confirmed
         {
@@ -514,15 +607,21 @@ impl eframe::App for App {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save();
         }
-        if let Some((provider, kind, outcome)) = self.poll_probe() {
-            if kind == Probe::ListModels && outcome.ok {
-                let models = outcome.remote_models.clone();
-                if models.is_empty() {
-                    self.toast_info("服务商返回成功，但没解析出模型列表");
-                } else {
-                    self.dialog_checkbox = vec![false; models.len()];
-                    self.dialog = Some(Dialog::ImportRemote { provider, models });
-                }
+        // Press ? to open help
+        if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::Questionmark))
+        {
+            self.show_about = true;
+        }
+        if let Some((provider, kind, outcome)) = self.poll_probe()
+            && kind == Probe::ListModels
+            && outcome.ok
+        {
+            let models = outcome.remote_models.clone();
+            if models.is_empty() {
+                self.toast_info("服务商返回成功，但没解析出模型列表");
+            } else {
+                self.dialog_checkbox = vec![false; models.len()];
+                self.dialog = Some(Dialog::ImportRemote { provider, models });
             }
         }
 
@@ -537,6 +636,9 @@ impl eframe::App for App {
                     .inner_margin(Margin::symmetric(28, 22)),
             )
             .show(root, |ui| {
+                if self.ssh_busy() {
+                    ui.disable();
+                }
                 if self.doc.is_none() {
                     self.error_page(ui);
                     return;
@@ -547,6 +649,27 @@ impl eframe::App for App {
                     self.page.title(),
                     self.page.subtitle(),
                 );
+                if self.is_remote() {
+                    widgets::hint(
+                        ui,
+                        &format!(
+                            "{}  /  {}  ·  远程快照，点击保存才会写入",
+                            self.target_label(),
+                            self.doc
+                                .as_ref()
+                                .map(|doc| doc.codex_home.display().to_string())
+                                .unwrap_or_default()
+                        ),
+                    );
+                    ui.add_space(10.0);
+                }
+                if let Some(error) = &self.remote.error {
+                    ScrollArea::vertical()
+                        .id_salt("environment-error")
+                        .max_height(100.0)
+                        .show(ui, |ui| widgets::note(ui, error, theme::DANGER));
+                    ui.add_space(8.0);
+                }
                 match self.page {
                     // These two manage their own split view and scrolling.
                     Page::Models => pages::models::show(self, ui, &ctx),
@@ -566,8 +689,11 @@ impl eframe::App for App {
                 }
             });
 
-        self.dialogs(&ctx);
-        self.diff_window(&ctx);
+        if !self.ssh_busy() {
+            self.dialogs(&ctx);
+            self.diff_window(&ctx);
+        }
+        self.environment_windows(&ctx);
         self.about_window(&ctx);
         self.toasts.show(&ctx);
     }
@@ -593,10 +719,10 @@ impl App {
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if widgets::ghost_button(ui, "选择 CODEX_HOME 文件夹").clicked() {
-                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                        self.load(folder);
-                    }
+                if widgets::ghost_button(ui, "选择 CODEX_HOME 文件夹").clicked()
+                    && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                {
+                    self.load(folder);
                 }
                 if widgets::ghost_button(ui, "重试默认位置 (~/.codex)").clicked() {
                     self.load(Document::default_home());
@@ -614,6 +740,9 @@ impl App {
                     .stroke(Stroke::new(1.0, theme::BORDER)),
             )
             .show(root, |ui| {
+                if self.ssh_busy() {
+                    ui.disable();
+                }
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("我的工作空间")
@@ -621,7 +750,11 @@ impl App {
                             .color(theme::TEXT_MUTED),
                     );
                     ui.label(RichText::new("/").color(theme::BORDER_STRONG));
-                    ui.label(RichText::new("本地配置").size(12.5).color(theme::TEXT));
+                    ui.label(
+                        RichText::new(self.target_label())
+                            .size(12.5)
+                            .color(theme::TEXT),
+                    );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let dirty = self.has_unsaved_changes();
                         ui.add_enabled_ui(dirty, |ui| {
@@ -657,8 +790,13 @@ impl App {
                     .stroke(Stroke::new(1.0, theme::BORDER)),
             )
             .show(root, |ui| {
+                if self.ssh_busy() {
+                    ui.disable();
+                }
                 ui.horizontal(|ui| {
-                    let (text, color) = if self.doc.is_none() {
+                    let (text, color) = if self.ssh_busy() {
+                        ("SSH 操作进行中…", theme::INFO)
+                    } else if self.doc.is_none() {
                         ("配置尚未载入", theme::DANGER)
                     } else if self.has_raw_draft() {
                         ("源文件草稿尚未应用", theme::WARN)
@@ -666,13 +804,22 @@ impl App {
                         ("有未保存的修改", theme::WARN)
                     } else if self.saved_needs_restart {
                         ("已保存 · 重启 Codex 后使用新配置", theme::OK)
+                    } else if self.is_remote() {
+                        ("已载入远程快照 · 非实时同步", theme::TEXT_DIM)
                     } else {
                         ("已与本地文件同步", theme::TEXT_DIM)
                     };
                     ui.label(RichText::new(icons::SHIELD).size(16.0).color(color));
                     ui.label(RichText::new(text).size(12.0).color(color));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if widgets::link_button(ui, "重启服务…", theme::ACCENT).clicked() {
+                        if self.is_remote() {
+                            ui.label(
+                                RichText::new("远端重启需手动完成")
+                                    .size(11.5)
+                                    .color(theme::TEXT_MUTED),
+                            );
+                        } else if widgets::link_button(ui, "重启服务…", theme::ACCENT).clicked()
+                        {
                             self.open_restart_dialog();
                         }
                         if ui.available_width() > 160.0 {
@@ -698,48 +845,83 @@ impl App {
                     .stroke(Stroke::new(1.0, theme::BORDER)),
             )
             .show(root, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.horizontal(|ui| {
-                    widgets::icon_tile(ui, icons::BRAND, 36.0, 24.0, theme::ACCENT);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
+                if self.ssh_busy() {
+                    ui.disable();
+                }
+                ScrollArea::vertical()
+                    .id_salt("sidebar-navigation")
+                    .max_height((ui.available_height() - 132.0).max(160.0))
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        ui.horizontal(|ui| {
+                            widgets::icon_tile(ui, icons::BRAND, 36.0, 24.0, theme::ACCENT);
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.label(
+                                    RichText::new("Codex")
+                                        .size(23.0)
+                                        .strong()
+                                        .color(theme::TEXT),
+                                );
+                                ui.label(
+                                    RichText::new("配置助手").size(12.0).color(theme::TEXT_DIM),
+                                );
+                            });
+                        });
+                        ui.add_space(20.0);
+                        theme::subtle_frame().show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(
+                                RichText::new("当前环境")
+                                    .size(10.5)
+                                    .color(theme::TEXT_MUTED),
+                            );
+                            ui.label(
+                                RichText::new(self.target_label())
+                                    .size(13.0)
+                                    .strong()
+                                    .color(theme::TEXT),
+                            );
+                            if widgets::link_button(ui, "切换环境…", theme::ACCENT).clicked()
+                            {
+                                self.open_environment();
+                            }
+                        });
+                        ui.add_space(18.0);
                         ui.label(
-                            RichText::new("Codex")
-                                .size(23.0)
-                                .strong()
-                                .color(theme::TEXT),
-                        );
-                        ui.label(RichText::new("配置助手").size(12.0).color(theme::TEXT_DIM));
-                    });
-                });
-                ui.add_space(24.0);
-                ui.label(
-                    RichText::new("日常使用")
-                        .size(11.0)
-                        .color(theme::TEXT_MUTED),
-                );
-                ui.add_space(8.0);
-                let counts = self.sidebar_counts();
-                for page in Page::ALL {
-                    if page == Page::Profiles {
-                        ui.add_space(16.0);
-                        ui.label(
-                            RichText::new("进阶工具")
+                            RichText::new("日常使用")
                                 .size(11.0)
                                 .color(theme::TEXT_MUTED),
                         );
                         ui.add_space(8.0);
-                    }
-                    let selected = self.page == page;
-                    if self.nav_item(ui, page, selected, counts.get(&page).copied().flatten()) {
-                        self.page = page;
-                    }
-                    ui.add_space(2.0);
-                }
+                        let counts = self.sidebar_counts();
+                        for page in Page::ALL {
+                            if page == Page::Profiles {
+                                ui.add_space(16.0);
+                                ui.label(
+                                    RichText::new("进阶工具")
+                                        .size(11.0)
+                                        .color(theme::TEXT_MUTED),
+                                );
+                                ui.add_space(8.0);
+                            }
+                            let selected = self.page == page;
+                            if self.nav_item(
+                                ui,
+                                page,
+                                selected,
+                                counts.get(&page).copied().flatten(),
+                            ) {
+                                self.page = page;
+                            }
+                            ui.add_space(2.0);
+                        }
+                    });
 
                 ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
                     ui.label(
-                        RichText::new("桌面版  /  v0.1.0")
+                        RichText::new(concat!("桌面版  /  v", env!("CARGO_PKG_VERSION")))
                             .size(10.5)
                             .color(theme::TEXT_MUTED),
                     );
@@ -750,9 +932,17 @@ impl App {
                     ui.add_space(4.0);
                     if let Some(doc) = &self.doc {
                         let home = doc.codex_home.clone();
-                        if widgets::link_button(ui, "打开配置文件夹", theme::TEXT_DIM)
-                            .on_hover_text(home.display().to_string())
-                            .clicked()
+                        if widgets::link_button(
+                            ui,
+                            if self.is_remote() {
+                                "查看远程源文件"
+                            } else {
+                                "打开配置文件夹"
+                            },
+                            theme::TEXT_DIM,
+                        )
+                        .on_hover_text(home.display().to_string())
+                        .clicked()
                         {
                             self.open_in_editor(home);
                         }
@@ -772,7 +962,7 @@ impl App {
             theme::TEXT_DIM
         };
         let response = ui.add_sized(
-            [ui.available_width(), 40.0],
+            [ui.available_width(), 36.0],
             egui::Button::new(RichText::new(page.title()).size(13.5).color(color))
                 .fill(if selected {
                     theme::ACCENT_WEAK
@@ -893,7 +1083,7 @@ impl App {
             .collapsible(false)
             .default_size([560.0, 460.0])
             .show(ctx, |ui| {
-                ui.label(RichText::new("Codex 配置助手 v0.1.0").size(17.0).strong());
+                ui.label(RichText::new(concat!("Codex 配置助手 v", env!("CARGO_PKG_VERSION"))).size(17.0).strong());
                 ui.label(
                     RichText::new("一个给 Codex 命令行工具用的图形化配置编辑器：不用手写 TOML 也能改配置、加模型、加服务商。")
                         .size(13.0)
@@ -908,6 +1098,28 @@ impl App {
                         "4. 点右上角「保存配置」。保存前会自动备份；重启 Codex 后使用新配置。",
                     ] {
                         ui.label(RichText::new(tip).size(12.5).color(theme::TEXT_DIM));
+                        ui.add_space(2.0);
+                    }
+                });
+                ui.add_space(6.0);
+
+                // Keyboard shortcuts section
+                widgets::section(ui, icons::GEAR, "键盘快捷键", "", |ui| {
+                    let is_mac = cfg!(target_os = "macos");
+                    let cmd = if is_mac { "⌘" } else { "Ctrl+" };
+                    let shortcuts = [
+                        (format!("{}S", cmd), "保存配置"),
+                        ("?".to_string(), "打开这个帮助窗口"),
+                    ];
+                    for (key, action) in shortcuts {
+                        ui.horizontal(|ui| {
+                            widgets::code_chip(ui, &key);
+                            ui.label(
+                                RichText::new(action)
+                                    .size(12.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                        });
                         ui.add_space(2.0);
                     }
                 });

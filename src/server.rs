@@ -73,7 +73,7 @@ struct Row {
 fn is_app_server(cmd: &str) -> bool {
     let tokens: Vec<&str> = cmd.split_whitespace().collect();
     // `app-server` must be a real argument, not a substring of some path.
-    if !tokens.iter().any(|t| *t == "app-server") {
+    if !tokens.contains(&"app-server") {
         return false;
     }
     // Exclude the SSH forwarder and the self-managing daemon.
@@ -86,11 +86,11 @@ fn is_app_server(cmd: &str) -> bool {
     // The launching binary (first token) must actually be codex (either the
     // native binary or the `node …/codex` wrapper) — not a shell / cargo / any
     // other process whose arguments merely happen to mention "app-server".
-    let Some(first) = tokens.first() else { return false };
+    let Some(first) = tokens.first() else {
+        return false;
+    };
     let bin = first.rsplit('/').next().unwrap_or(first);
-    let launcher_is_codex = bin == "codex"
-        || bin == "codex.exe"
-        || bin.starts_with("codex-");
+    let launcher_is_codex = bin == "codex" || bin == "codex.exe" || bin.starts_with("codex-");
     // The `node …/codex app-server` wrapper: node is the binary, but the next
     // token is a path ending in `/codex`.
     let node_launches_codex = (bin == "node" || bin == "node.exe")
@@ -103,8 +103,11 @@ fn is_app_server(cmd: &str) -> bool {
 /// The native codex binary (not the node wrapper) — this is the process that
 /// actually reads the config, and the one we restart.
 fn is_native(cmd: &str) -> bool {
-    cmd.contains("bin/codex") || cmd.contains("codex-darwin") || cmd.contains("codex-linux")
-        || cmd.contains("codex-windows") || cmd.contains("codex.exe")
+    cmd.contains("bin/codex")
+        || cmd.contains("codex-darwin")
+        || cmd.contains("codex-linux")
+        || cmd.contains("codex-windows")
+        || cmd.contains("codex.exe")
 }
 
 fn host_of(mut pid: u32, all: &HashMap<u32, Row>) -> Host {
@@ -230,7 +233,9 @@ pub fn scan_with(sys: &mut System, our_pid: u32) -> Vec<ServerInstance> {
         let host_probe_pid = shell_pid.unwrap_or(*pid);
         let host = host_of(host_probe_pid, &all);
         let is_our_host = our_ancestors.contains(pid)
-            || shell_pid.map(|s| our_ancestors.contains(&s)).unwrap_or(false)
+            || shell_pid
+                .map(|s| our_ancestors.contains(&s))
+                .unwrap_or(false)
             || *pid == our_pid;
         instances.push(ServerInstance {
             pid: *pid,
@@ -300,7 +305,11 @@ pub fn restart_instance(inst: &ServerInstance) -> RestartOutcome {
             host: inst.host.label(),
             ok: true,
             message: if inst.host.auto_respawns() {
-                format!("已结束进程 {}，{} 会自动拉起一个读取新配置的服务。", inst.pid, inst.host.label())
+                format!(
+                    "已结束进程 {}，{} 会自动拉起一个读取新配置的服务。",
+                    inst.pid,
+                    inst.host.label()
+                )
             } else {
                 format!("已结束进程 {}。请手动重新启动它以应用新配置。", inst.pid)
             },
@@ -332,13 +341,19 @@ mod tests {
     use std::collections::HashMap;
 
     fn row(cmd: &str, parent: Option<u32>) -> Row {
-        Row { native: is_native(cmd), cmd: cmd.to_string(), parent }
+        Row {
+            native: is_native(cmd),
+            cmd: cmd.to_string(),
+            parent,
+        }
     }
 
     #[test]
     fn app_server_argument_must_be_a_real_token() {
         // Real codex launchers.
-        assert!(is_app_server("/Applications/ChatGPT.app/Contents/Resources/codex app-server"));
+        assert!(is_app_server(
+            "/Applications/ChatGPT.app/Contents/Resources/codex app-server"
+        ));
         assert!(is_app_server(
             "node /Applications/ChatGPT.app/Contents/Resources//codex app-server"
         ));
@@ -360,8 +375,17 @@ mod tests {
         // line mentions ChatGPT.app — but the GUI host is Zed, found by walking
         // parents to `Zed.app/Contents/MacOS/zed`.
         let mut all: HashMap<u32, Row> = HashMap::new();
-        all.insert(10, row("node /Applications/ChatGPT.app/Contents/Resources//codex app-server", Some(20)));
-        all.insert(20, row("/opt/homebrew/.../node .../codex-acp/...", Some(30)));
+        all.insert(
+            10,
+            row(
+                "node /Applications/ChatGPT.app/Contents/Resources//codex app-server",
+                Some(20),
+            ),
+        );
+        all.insert(
+            20,
+            row("/opt/homebrew/.../node .../codex-acp/...", Some(30)),
+        );
         all.insert(30, row("/Applications/Zed.app/Contents/MacOS/zed", Some(1)));
         assert_eq!(host_of(10, &all), Host::Zed);
     }
@@ -369,8 +393,17 @@ mod tests {
     #[test]
     fn chatgpt_desktop_is_attributed_by_its_main_executable() {
         let mut all: HashMap<u32, Row> = HashMap::new();
-        all.insert(10, row("node /Applications/ChatGPT.app/Contents/Resources//codex app-server", Some(20)));
-        all.insert(20, row("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", Some(1)));
+        all.insert(
+            10,
+            row(
+                "node /Applications/ChatGPT.app/Contents/Resources//codex app-server",
+                Some(20),
+            ),
+        );
+        all.insert(
+            20,
+            row("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", Some(1)),
+        );
         assert_eq!(host_of(10, &all), Host::ChatGptDesktop);
     }
 }

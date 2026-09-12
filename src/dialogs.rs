@@ -584,30 +584,28 @@ impl App {
                 widgets::FieldSpec::new("文件名", "model_catalog_json", "相对路径会以 CODEX_HOME 为基准，也可以填绝对路径。"),
                 |ui| widgets::mono_field(ui, "catalog-filename", &mut filename, "model-catalog.json"),
             );
-            let (home, target) = match &self.doc {
-                Some(doc) => (doc.codex_home.clone(), doc.resolve_against_home(filename.trim())),
+            let target = match &self.doc {
+                Some(doc) => doc.resolve_against_home(filename.trim()),
                 None => return action,
             };
             widgets::kv_row(ui, "将创建在", &target.display().to_string());
-            if target.exists() {
+            let exists = !self.is_remote() && target.exists();
+            if exists {
                 widgets::note(ui, "这个文件已经存在了。换一个名字，或者用「选择已有文件」直接指向它。", theme::WARN);
+            }
+            if self.is_remote() {
+                widgets::hint(ui, "将在远程机器创建；保存时检查文件是否已存在，不覆盖已有文件。");
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.add_enabled_ui(!target.exists() && !filename.trim().is_empty(), |ui| {
+                ui.add_enabled_ui(!exists && !filename.trim().is_empty(), |ui| {
                     if widgets::primary_button(ui, "创建并启用").clicked() {
                         action = Act::CreateCatalog(filename.trim().to_string());
                     }
                 });
                 if widgets::ghost_button(ui, "选择已有文件…").clicked() {
-                    if let Some(picked) = rfd::FileDialog::new()
-                        .add_filter("JSON 模型目录", &["json"])
-                        .set_directory(&home)
-                        .pick_file()
-                    {
-                        self.set_catalog_path(picked);
-                        action = Act::Close;
-                    }
+                    self.select_catalog_file();
+                    action = Act::Close;
                 }
                 if widgets::ghost_button(ui, "取消").clicked() {
                     action = Act::Close;
@@ -721,11 +719,10 @@ impl App {
             widgets::mono_field(ui, "home-path", &mut buffer, "~/.codex");
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if widgets::ghost_button(ui, "浏览…").clicked() {
-                    if let Some(picked) = rfd::FileDialog::new().pick_folder() {
+                if widgets::ghost_button(ui, "浏览…").clicked()
+                    && let Some(picked) = rfd::FileDialog::new().pick_folder() {
                         buffer = picked.display().to_string();
                     }
-                }
                 let trimmed = buffer.trim().to_string();
                 ui.add_enabled_ui(!trimmed.is_empty(), |ui| {
                     let response = if dirty { widgets::danger_button(ui, "放弃修改并载入") }
@@ -1055,6 +1052,10 @@ impl App {
     }
 
     fn create_catalog(&mut self, filename: &str) {
+        if self.has_raw_draft() || self.model_input_error.is_some() {
+            self.toast_error("源文件还有未应用的草稿，请先应用或放弃，再创建模型目录。");
+            return;
+        }
         let Some(doc) = &mut self.doc else { return };
         if let Err(err) = doc.create_catalog(filename) {
             self.toast_error(format!("{err:#}"));
@@ -1066,14 +1067,28 @@ impl App {
     }
 
     pub fn set_catalog_path(&mut self, path: std::path::PathBuf) {
+        if self.ssh_busy() {
+            return;
+        }
+        if self.is_remote() {
+            self.start_remote_catalog(path.to_string_lossy().into_owned());
+            return;
+        }
+        if self.has_raw_draft() || self.model_input_error.is_some() {
+            self.toast_error("源文件还有未应用的草稿，请先应用或放弃，再切换模型目录。");
+            return;
+        }
         let Some(doc) = &mut self.doc else { return };
         let stored = match path.strip_prefix(&doc.codex_home) {
             Ok(relative) => relative.to_string_lossy().to_string(),
             Err(_) => path.display().to_string(),
         };
-        doc.config
-            .set_value_at(&["model_catalog_json"], value_str(&stored));
-        doc.reload_catalog();
+        let mut next_config = doc.config.clone();
+        next_config.set_value_at(&["model_catalog_json"], value_str(&stored));
+        if let Err(err) = doc.apply_config_text(&next_config.to_string()) {
+            self.toast_error(format!("{err:#}"));
+            return;
+        }
         self.editing_model = None;
         if let Some(catalog) = &doc.catalog {
             let count = catalog::model_count(catalog);
@@ -1119,7 +1134,7 @@ impl App {
         self.doc
             .as_ref()
             .and_then(|doc| doc.catalog.as_ref())
-            .map(|value| catalog::slugs(value))
+            .map(catalog::slugs)
             .unwrap_or_default()
     }
 

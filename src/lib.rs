@@ -11,7 +11,10 @@ pub mod doc;
 pub mod editors;
 pub mod net;
 pub mod page;
+pub mod remote;
+pub mod remote_ui;
 pub mod server;
+pub mod ssh_config;
 pub mod ui;
 
 pub use app::App;

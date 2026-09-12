@@ -25,6 +25,208 @@ fn fixture_home() -> tempfile::TempDir {
     dir
 }
 
+#[test]
+fn changing_catalog_path_preserves_unsaved_models_and_raw_drafts() {
+    let (mut harness, home) = app_harness();
+    let original = harness.state().doc.as_ref().unwrap().catalog_path.clone();
+    harness.state_mut().select_model(0);
+    harness.state_mut().model_editor.display_name = "keep this edit".into();
+    harness.state_mut().commit_model_editor();
+    let other = home.path().join("other.json");
+    fs::write(&other, r#"{"models":[]}"#).unwrap();
+    harness.state_mut().set_catalog_path(other.clone());
+    assert_eq!(harness.state().doc.as_ref().unwrap().catalog_path, original);
+    assert!(harness.state().doc.as_ref().unwrap().catalog_dirty());
+
+    harness.state_mut().discard();
+    harness.state_mut().raw_source = "draft".into();
+    harness.state_mut().raw_origin = String::new();
+    harness.state_mut().raw_buffer = "retain raw draft".into();
+    harness.state_mut().set_catalog_path(other);
+    assert_eq!(harness.state().doc.as_ref().unwrap().catalog_path, original);
+    assert_eq!(harness.state().raw_buffer, "retain raw draft");
+}
+
+#[test]
+fn malformed_catalog_offers_raw_repair_without_opening_an_editor() {
+    let (mut harness, _home) = app_harness();
+    harness.state_mut().doc.as_mut().unwrap().catalog = Some(serde_json::json!({"models":[42]}));
+    harness.state_mut().page = Page::Models;
+    harness.run_steps(3);
+    harness.root().get_by_label("转到源文件修复").click();
+    harness.run_steps(3);
+    assert_eq!(harness.state().page, Page::Raw);
+    assert!(harness.state().raw_tab_is_catalog);
+}
+
+#[test]
+fn stale_raw_draft_cannot_overwrite_changes_from_other_pages() {
+    let (mut harness, _home) = app_harness();
+    harness.state_mut().page = Page::Raw;
+    harness.run_steps(3);
+    harness.state_mut().raw_buffer.push_str("\n# raw draft\n");
+    harness
+        .state_mut()
+        .doc
+        .as_mut()
+        .unwrap()
+        .config
+        .set_value_at(&["model"], toml_edit::Value::from("changed-elsewhere"));
+    harness.run_steps(3);
+    let apply_label = format!("{} 应用到编辑器", codex_config::ui::icons::CHECK);
+    let apply = harness.root().get_by_label(&apply_label);
+    assert!(apply.accesskit_node().is_disabled());
+    assert!(harness.state().raw_buffer.contains("# raw draft"));
+}
+
+#[test]
+fn invalid_numeric_edits_cannot_be_saved_or_lost_by_switching_models() {
+    let (mut harness, home) = app_harness();
+    let original = fs::read_to_string(home.path().join("model-catalog.json")).unwrap();
+    harness.state_mut().select_model(0);
+    let old_limit = harness
+        .state()
+        .doc
+        .as_ref()
+        .unwrap()
+        .catalog
+        .as_ref()
+        .unwrap()["models"][0]["context_window"]
+        .clone();
+    harness.state_mut().model_editor.context_window = "not-a-number".into();
+    harness.state_mut().commit_model_editor();
+    assert_eq!(
+        harness
+            .state()
+            .doc
+            .as_ref()
+            .unwrap()
+            .catalog
+            .as_ref()
+            .unwrap()["models"][0]["context_window"],
+        old_limit
+    );
+    assert!(harness.state().has_unsaved_changes());
+    harness.state_mut().select_model(1);
+    assert_eq!(harness.state().editing_model, Some(0));
+    harness.state_mut().save();
+    assert_eq!(
+        fs::read_to_string(home.path().join("model-catalog.json")).unwrap(),
+        original
+    );
+    assert_eq!(harness.state().model_editor.context_window, "not-a-number");
+    assert_eq!(harness.state().page, Page::Models);
+}
+
+#[test]
+fn environment_dialog_lists_ssh_aliases_without_connecting() {
+    let (mut harness, home) = app_harness();
+    let config = home.path().join("ssh-config");
+    fs::write(&config, "Host dev gpu-server\nHost * !excluded\n").unwrap();
+    harness.state_mut().remote.config_file = config.display().to_string();
+    harness.root().get_by_label("切换环境…").click();
+    harness.run_steps(3);
+    harness.root().get_by_label("远程 SSH").click();
+    harness.run_steps(3);
+    assert_eq!(harness.state().remote.aliases, ["dev", "gpu-server"]);
+    harness.state_mut().remote.home = "/previous/machine".into();
+    harness.root().get_by_value("dev").click();
+    harness.run_steps(3);
+    harness.root().get_by_label("gpu-server").click();
+    harness.run_steps(3);
+    assert_eq!(harness.state().remote.alias, "gpu-server");
+    assert!(harness.state().remote.home.is_empty());
+    assert!(harness.state().remote.target.is_none());
+    assert!(!harness.state().ssh_busy());
+    render(&mut harness, "ssh-environment");
+}
+
+#[test]
+fn ssh_switch_requires_explicit_discard_and_failed_load_preserves_drafts() {
+    let (mut harness, home) = app_harness();
+    harness.state_mut().raw_source = "draft".into();
+    harness.state_mut().raw_buffer = "keep draft".into();
+    harness
+        .state_mut()
+        .connect_remote(codex_config::remote::SshTarget {
+            alias: "fixture".into(),
+            config_file: home.path().join("not-used"),
+            home: String::new(),
+        });
+    assert!(!harness.state().ssh_busy());
+    assert!(harness.state().remote.error.is_some());
+    harness.state_mut().load(home.path().join("config.toml"));
+    assert_eq!(harness.state().raw_buffer, "keep draft");
+    assert!(harness.state().doc.is_some());
+}
+
+#[test]
+fn remote_mode_blocks_local_file_open_probe_and_restart() {
+    let (mut harness, _home) = app_harness();
+    let snapshot = codex_config::remote::Snapshot {
+        home: "/fixture/remote".into(),
+        user_home: "/fixture".into(),
+        config: Some(String::new()),
+        catalog_path: None,
+        catalog: None,
+    };
+    harness.state_mut().doc = Some(codex_config::doc::Document::from_remote(snapshot).unwrap());
+    harness.state_mut().open_restart_dialog();
+    harness.state_mut().rescan_servers();
+    harness.state_mut().run_restart_selected();
+    assert!(!harness.state().restart_scanned);
+    assert!(harness.state().dialog.is_none());
+    harness.state_mut().discard();
+    assert!(harness.state().is_remote());
+    let ctx = harness.state().remote.ctx.clone();
+    harness
+        .state_mut()
+        .start_probe("fixture", codex_config::net::Probe::Chat, None, &ctx);
+    assert!(harness.state().probe.is_none());
+    harness
+        .state_mut()
+        .open_in_editor(PathBuf::from("/must-not-open"));
+    assert_eq!(harness.state().page, Page::Raw);
+    harness.state_mut().select_catalog_file();
+    assert!(harness.state().remote.catalog_open);
+}
+
+#[test]
+fn cancelled_ssh_result_cannot_replace_current_document() {
+    use std::sync::{Arc, atomic::AtomicBool, mpsc};
+    let (mut harness, home) = app_harness();
+    let (sender, receiver) = mpsc::channel();
+    let original_home = harness.state().doc.as_ref().unwrap().codex_home.clone();
+    let snapshot = codex_config::remote::Snapshot {
+        home: "/other/remote".into(),
+        user_home: "/other".into(),
+        config: None,
+        catalog_path: None,
+        catalog: None,
+    };
+    let doc = codex_config::doc::Document::from_remote(snapshot).unwrap();
+    let target = codex_config::remote::SshTarget {
+        alias: "fixture".into(),
+        config_file: home.path().join("unused"),
+        home: String::new(),
+    };
+    sender
+        .send(Ok(codex_config::remote::JobResult::Loaded(target, doc)))
+        .unwrap();
+    harness.state_mut().remote.job = Some(codex_config::remote::Job {
+        receiver,
+        cancel: Arc::new(AtomicBool::new(true)),
+        saving: false,
+    });
+    harness.state_mut().poll_ssh();
+    assert_eq!(
+        harness.state().doc.as_ref().unwrap().codex_home,
+        original_home
+    );
+    assert!(!harness.state().is_remote());
+    assert!(!harness.state().ssh_busy());
+}
+
 fn screenshot_dir() -> PathBuf {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("screenshots");
     fs::create_dir_all(&dir).expect("create screenshots dir");
@@ -35,7 +237,7 @@ fn app_harness() -> (Harness<'static, App>, tempfile::TempDir) {
     let home = fixture_home();
     let target = home.path().to_path_buf();
     let mut harness = Harness::builder()
-        .with_theme(egui::Theme::Light)
+        .with_theme(egui::Theme::Dark)
         .with_size(egui::vec2(1440.0, 940.0))
         .with_pixels_per_point(2.0)
         .build_eframe(move |cc| App::with_home(cc, target));
@@ -256,7 +458,7 @@ fn loads_a_real_codex_home_if_present() {
         return;
     }
     let mut harness = Harness::builder()
-        .with_theme(egui::Theme::Light)
+        .with_theme(egui::Theme::Dark)
         .with_size(egui::vec2(1440.0, 940.0))
         .build_eframe(move |cc| App::with_home(cc, home));
     harness.run_steps(3);
@@ -529,7 +731,7 @@ fn malformed_config_shows_a_recoverable_error_page() {
     fs::write(home.path().join("config.toml"), "model = [").unwrap();
     let target = home.path().to_path_buf();
     let mut harness = Harness::builder()
-        .with_theme(egui::Theme::Light)
+        .with_theme(egui::Theme::Dark)
         .with_size(egui::vec2(1000.0, 660.0))
         .build_eframe(move |cc| App::with_home(cc, target));
     harness.run_steps(3);
@@ -657,7 +859,7 @@ fn new_user_can_start_without_creating_any_files() {
     let home = tempfile::tempdir().unwrap();
     let target = home.path().to_path_buf();
     let mut harness = Harness::builder()
-        .with_theme(egui::Theme::Light)
+        .with_theme(egui::Theme::Dark)
         .with_size(egui::vec2(1360.0, 880.0))
         .build_eframe(move |cc| App::with_home(cc, target));
     harness.run_steps(3);

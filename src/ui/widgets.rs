@@ -61,7 +61,7 @@ pub fn icon_chip(ui: &mut Ui, glyph: &str, size: f32, icon_size: f32) {
     icon_tile(ui, glyph, size, icon_size, theme::ACCENT);
 }
 
-/// White card with rounded corners and subtle border.
+/// Raised surface with rounded corners and a subtle border.
 pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     theme::card_frame().show(ui, add).inner
 }
@@ -635,7 +635,7 @@ pub fn primary_button(ui: &mut Ui, text: &str) -> egui::Response {
         RichText::new(text)
             .size(14.0)
             .strong()
-            .color(Color32::WHITE),
+            .color(theme::INPUT_BG),
     )
     .fill(theme::ACCENT)
     .stroke(Stroke::NONE)

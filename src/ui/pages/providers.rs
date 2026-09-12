@@ -87,10 +87,10 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
         return;
     }
 
-    if app.editing_provider.is_none() {
-        if let Some(row) = rows.iter().find(|row| row.active).or(rows.first()) {
-            app.select_provider(&row.id);
-        }
+    if app.editing_provider.is_none()
+        && let Some(row) = rows.iter().find(|row| row.active).or(rows.first())
+    {
+        app.select_provider(&row.id);
     }
     let list_width = (ui.available_width() * 0.27).clamp(224.0, 280.0);
     let height = (ui.available_height() - 20.0).max(200.0);
@@ -468,7 +468,14 @@ fn editor(
                         changed = true;
                     }
                     let key = editor.env_key.clone();
-                    if !key.is_empty() {
+                    if !key.is_empty() && app.is_remote() {
+                        widgets::note(
+                            ui,
+                            "这是远程机器的环境变量。本工具不读取或验证远端密钥，也不会使用本机的同名变量。",
+                            theme::TEXT_DIM,
+                        );
+                    }
+                    if !key.is_empty() && !app.is_remote() {
                         match std::env::var(&key) {
                             Ok(value) if !value.is_empty() => {
                                 widgets::note(
@@ -692,7 +699,14 @@ fn test_card(app: &mut App, ui: &mut Ui, row: &Row, action: &mut ProviderAction)
         "保存前先确认地址、协议、密钥三者是对的",
         |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.add_enabled_ui(!busy, |ui| {
+                if app.is_remote() {
+                    widgets::note(
+                        ui,
+                        "远程配置请在目标机器验证；此处不使用本机网络或密钥进行测试。",
+                        theme::TEXT_DIM,
+                    );
+                }
+                ui.add_enabled_ui(!busy && !app.is_remote(), |ui| {
                     let label = match &model {
                         Some(model) => format!("{} 发一条测试请求（用 {model}）", icons::TEST),
                         None => format!("{} 发一条测试请求", icons::TEST),
@@ -715,19 +729,19 @@ fn test_card(app: &mut App, ui: &mut Ui, row: &Row, action: &mut ProviderAction)
                     "提示：模型目录里还没有绑定这个服务商的模型，测试时会用占位模型名，可能返回「模型不存在」。\n先加一个模型再测更准。",
                 );
             }
-            if let Some((id, outcome)) = app.last_outcome.clone() {
-                if id == row.id {
-                    ui.add_space(6.0);
-                    let color = if outcome.ok { theme::OK } else { theme::DANGER };
-                    widgets::note(
-                        ui,
-                        &format!(
-                            "{}（HTTP {}，{} ms）\n{}",
-                            outcome.summary, outcome.status, outcome.elapsed_ms, outcome.detail
-                        ),
-                        color,
-                    );
-                }
+            if let Some((id, outcome)) = app.last_outcome.clone()
+                && id == row.id
+            {
+                ui.add_space(6.0);
+                let color = if outcome.ok { theme::OK } else { theme::DANGER };
+                widgets::note(
+                    ui,
+                    &format!(
+                        "{}（HTTP {}，{} ms）\n{}",
+                        outcome.summary, outcome.status, outcome.elapsed_ms, outcome.detail
+                    ),
+                    color,
+                );
             }
         },
     );

@@ -32,10 +32,9 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
                 app.select_profile(&profile);
             }
             if widgets::link_button(ui, "停用配置档，使用下面的设置", theme::ACCENT).clicked()
+                && let Some(doc) = &mut app.doc
             {
-                if let Some(doc) = &mut app.doc {
-                    doc.config.remove_at(&["profile"]);
-                }
+                doc.config.remove_at(&["profile"]);
             }
         });
         ui.add_space(12.0);
@@ -73,7 +72,7 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     ui.add_space(16.0);
     widgets::hint(
         ui,
-        "所有修改只在点击「保存配置」后写入本地文件。保存前会自动备份。",
+        "所有修改只在点击「保存配置」后写入当前环境的文件。保存前会自动备份。",
     );
 }
 
@@ -91,32 +90,33 @@ fn welcome(app: &mut App, ui: &mut Ui) {
     } else {
         ("管理我的模型", Page::Models)
     };
-    let response = egui::Frame::new()
-        .fill(theme::ACCENT_WEAK)
-        .corner_radius(egui::CornerRadius::same(18))
-        .inner_margin(egui::Margin::same(26))
+    egui::Frame::new()
+        .fill(theme::CARD)
+        .stroke(egui::Stroke::new(1.0, theme::BORDER))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::same(22))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.set_width(ui.available_width());
             ui.label(
-                RichText::new("YOUR CODEX, YOUR WAY")
+                RichText::new("WORKSPACE / CONFIGURATION")
                     .size(11.0)
                     .strong()
-                    .color(theme::ACCENT),
+                    .color(theme::TEXT_MUTED),
             );
             ui.add_space(7.0);
             ui.label(
-                RichText::new("简单配置，安心开工。")
-                    .size(29.0)
+                RichText::new("你的环境，由你设定。")
+                    .size(27.0)
                     .strong()
                     .color(theme::TEXT),
             );
             ui.add_space(4.0);
             ui.label(
                 RichText::new(if has_custom {
-                    "模型、连接、使用权限，在这里一次理顺。不需要手写配置文件。"
+                    "在本机与远程机器之间切换，统一管理模型、服务商和使用权限。"
                 } else {
-                    "第一次使用？从连接服务开始。已有 Codex 登录态，也可以保留内置默认设置。"
+                    "从选择环境开始，再配置服务商和模型。修改会保留在编辑器中，直到你点击保存。"
                 })
                 .size(13.5)
                 .color(theme::TEXT_DIM),
@@ -130,43 +130,10 @@ fn welcome(app: &mut App, ui: &mut Ui) {
                 ui.label(
                     RichText::new("01  连接服务   /   02  选择模型   /   03  保存使用")
                         .size(12.0)
-                        .color(theme::ACCENT_TEXT),
+                        .color(theme::TEXT_MUTED),
                 );
             });
-        })
-        .response;
-    // A quiet native illustration of the three things this assistant connects.
-    if response.rect.width() > 1000.0 {
-        let center = egui::pos2(response.rect.right() - 145.0, response.rect.center().y);
-        let painter = ui.painter();
-        for offset in [egui::vec2(-78.0, 24.0), egui::vec2(72.0, -24.0)] {
-            painter.line_segment(
-                [center, center + offset],
-                egui::Stroke::new(1.5, theme::SAGE),
-            );
-        }
-        for (offset, size, icon) in [
-            (egui::vec2(-78.0, 24.0), 42.0, icons::PROVIDERS),
-            (egui::Vec2::ZERO, 64.0, icons::MODELS),
-            (egui::vec2(72.0, -24.0), 42.0, icons::SHIELD),
-        ] {
-            let rect = egui::Rect::from_center_size(center + offset, egui::Vec2::splat(size));
-            painter.rect(
-                rect,
-                egui::CornerRadius::same(14),
-                theme::CARD,
-                egui::Stroke::new(1.0, theme::SAGE),
-                egui::StrokeKind::Inside,
-            );
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                icon,
-                egui::FontId::proportional(size * 0.48),
-                theme::ACCENT,
-            );
-        }
-    }
+        });
 }
 
 fn active_model_card(app: &mut App, ui: &mut Ui) {
@@ -357,15 +324,13 @@ fn safety_card(app: &mut App, ui: &mut Ui) {
                         },
                     )),
                 );
-                if response.clicked() {
-                    if let Some(doc) = &mut app.doc {
-                        doc.config
-                            .set_value_at(&["sandbox_mode"], toml_edit::Value::from(value));
-                        doc.config.set_value_at(
-                            &["approval_policy"],
-                            toml_edit::Value::from("on-request"),
-                        );
-                    }
+                if response.clicked()
+                    && let Some(doc) = &mut app.doc
+                {
+                    doc.config
+                        .set_value_at(&["sandbox_mode"], toml_edit::Value::from(value));
+                    doc.config
+                        .set_value_at(&["approval_policy"], toml_edit::Value::from("on-request"));
                 }
                 ui.label(RichText::new(description).size(12.0).color(theme::TEXT_DIM));
                 ui.add_space(8.0);
@@ -427,12 +392,10 @@ fn files_card(app: &mut App, ui: &mut Ui) {
             widgets::kv_row(ui, "CODEX_HOME", &home.display().to_string());
             ui.horizontal(|ui| {
                 if widgets::ghost_button(ui, "切换文件夹").clicked() {
-                    app.dialog = Some(Dialog::ChangeHome {
-                        buffer: home.display().to_string(),
-                    });
+                    app.open_environment();
                 }
-                if widgets::ghost_button(ui, "在访达中打开").clicked() {
-                    let _ = open::that(&home);
+                if !app.is_remote() && widgets::ghost_button(ui, "打开文件夹").clicked() {
+                    app.open_in_editor(home.clone());
                 }
                 if widgets::ghost_button(ui, "重新从磁盘载入").clicked() {
                     app.request_discard();
@@ -441,7 +404,16 @@ fn files_card(app: &mut App, ui: &mut Ui) {
             ui.add_space(8.0);
             widgets::kv_row(ui, "config.toml", &config_path.display().to_string());
             ui.horizontal(|ui| {
-                if widgets::ghost_button(ui, "用默认程序打开").clicked() {
+                if widgets::ghost_button(
+                    ui,
+                    if app.is_remote() {
+                        "查看源文件"
+                    } else {
+                        "用默认程序打开"
+                    },
+                )
+                .clicked()
+                {
                     app.open_in_editor(config_path.clone());
                 }
             });
@@ -459,16 +431,12 @@ fn files_card(app: &mut App, ui: &mut Ui) {
                         widgets::kv_row(ui, "模型数量", &format!("{catalog_count} 个"));
                     }
                     ui.horizontal(|ui| {
-                        if widgets::ghost_button(ui, "换一个文件").clicked() {
-                            if let Some(picked) = rfd::FileDialog::new()
-                                .add_filter("JSON", &["json"])
-                                .set_directory(&home)
-                                .pick_file()
-                            {
-                                app.set_catalog_path(picked);
-                            }
+                        if widgets::ghost_button(ui, "选择已有文件…").clicked() {
+                            app.select_catalog_file();
                         }
-                        if path.exists() && widgets::ghost_button(ui, "用默认程序打开").clicked()
+                        if !app.is_remote()
+                            && path.exists()
+                            && widgets::ghost_button(ui, "用默认程序打开").clicked()
                         {
                             app.open_in_editor(path.clone());
                         }
@@ -483,13 +451,7 @@ fn files_card(app: &mut App, ui: &mut Ui) {
                             });
                         }
                         if widgets::ghost_button(ui, "选择已有文件…").clicked() {
-                            if let Some(picked) = rfd::FileDialog::new()
-                                .add_filter("JSON", &["json"])
-                                .set_directory(&home)
-                                .pick_file()
-                            {
-                                app.set_catalog_path(picked);
-                            }
+                            app.select_catalog_file();
                         }
                     });
                 }

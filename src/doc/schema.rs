@@ -16,9 +16,7 @@ pub struct Choice {
 
 impl Choice {
     pub fn find(list: &[Choice], value: &str) -> Option<&'static str> {
-        list.iter()
-            .find(|c| c.value == value)
-            .map(|c| c.label)
+        list.iter().find(|c| c.value == value).map(|c| c.label)
     }
 }
 
@@ -79,48 +77,161 @@ pub const APPROVAL_POLICIES: &[Choice] = &[
 ];
 
 pub const REASONING_EFFORTS: &[Choice] = &[
-    Choice { value: "none", label: "none 不推理", help: "不做额外思考，响应最快。" },
-    Choice { value: "minimal", label: "minimal 极简", help: "几乎不增加延迟的轻量思考。" },
-    Choice { value: "low", label: "low 低", help: "轻量推理，日常小任务足够快。" },
-    Choice { value: "medium", label: "medium 中（常用）", help: "平衡速度和思考深度。" },
-    Choice { value: "high", label: "high 高", help: "更深入的思考，适合复杂问题。" },
-    Choice { value: "xhigh", label: "xhigh 超高", help: "超高强度推理，适合难题。" },
-    Choice { value: "max", label: "max 最大", help: "最大推理强度，最难的问题。" },
-    Choice { value: "ultra", label: "ultra 极致", help: "最大推理强度并自动拆分子任务给子代理。" },
+    Choice {
+        value: "none",
+        label: "none 不推理",
+        help: "不做额外思考，响应最快。",
+    },
+    Choice {
+        value: "minimal",
+        label: "minimal 极简",
+        help: "几乎不增加延迟的轻量思考。",
+    },
+    Choice {
+        value: "low",
+        label: "low 低",
+        help: "轻量推理，日常小任务足够快。",
+    },
+    Choice {
+        value: "medium",
+        label: "medium 中（常用）",
+        help: "平衡速度和思考深度。",
+    },
+    Choice {
+        value: "high",
+        label: "high 高",
+        help: "更深入的思考，适合复杂问题。",
+    },
+    Choice {
+        value: "xhigh",
+        label: "xhigh 超高",
+        help: "超高强度推理，适合难题。",
+    },
+    Choice {
+        value: "max",
+        label: "max 最大",
+        help: "最大推理强度，最难的问题。",
+    },
+    Choice {
+        value: "ultra",
+        label: "ultra 极致",
+        help: "最大推理强度并自动拆分子任务给子代理。",
+    },
+    Choice {
+        value: "persistent",
+        label: "persistent 持续",
+        help: "持续任务模式使用的推理强度。",
+    },
 ];
 
 pub const REASONING_SUMMARIES: &[Choice] = &[
-    Choice { value: "auto", label: "auto 自动", help: "由 Codex 决定是否显示思考摘要（推荐）。" },
-    Choice { value: "concise", label: "concise 简洁", help: "只显示一句话的思考摘要。" },
-    Choice { value: "detailed", label: "detailed 详细", help: "显示更完整的思考过程。" },
-    Choice { value: "none", label: "none 不显示", help: "完全不显示模型的思考摘要。" },
+    Choice {
+        value: "auto",
+        label: "auto 自动",
+        help: "由 Codex 决定是否显示思考摘要（推荐）。",
+    },
+    Choice {
+        value: "concise",
+        label: "concise 简洁",
+        help: "只显示一句话的思考摘要。",
+    },
+    Choice {
+        value: "detailed",
+        label: "detailed 详细",
+        help: "显示更完整的思考过程。",
+    },
+    Choice {
+        value: "none",
+        label: "none 不显示",
+        help: "完全不显示模型的思考摘要。",
+    },
 ];
 
 pub const VERBOSITIES: &[Choice] = &[
-    Choice { value: "low", label: "low 简洁", help: "回答尽量简短。" },
-    Choice { value: "medium", label: "medium 适中", help: "默认的详细程度。" },
-    Choice { value: "high", label: "high 详细", help: "回答更详细、解释更多。" },
+    Choice {
+        value: "low",
+        label: "low 简洁",
+        help: "回答尽量简短。",
+    },
+    Choice {
+        value: "medium",
+        label: "medium 适中",
+        help: "默认的详细程度。",
+    },
+    Choice {
+        value: "high",
+        label: "high 详细",
+        help: "回答更详细、解释更多。",
+    },
 ];
 
 pub const PERSONALITIES: &[Choice] = &[
-    Choice { value: "friendly", label: "friendly 友好", help: "语气更亲切，重视团队协作氛围。" },
-    Choice { value: "pragmatic", label: "pragmatic 务实", help: "直接、注重把事做完的工程师风格。" },
-    Choice { value: "none", label: "none 无人格", help: "使用模型自带的默认提示词，不注入人格。" },
+    Choice {
+        value: "friendly",
+        label: "friendly 友好",
+        help: "语气更亲切，重视团队协作氛围。",
+    },
+    Choice {
+        value: "pragmatic",
+        label: "pragmatic 务实",
+        help: "直接、注重把事做完的工程师风格。",
+    },
+    Choice {
+        value: "none",
+        label: "none 无人格",
+        help: "使用模型自带的默认提示词，不注入人格。",
+    },
 ];
 
 pub const FILE_OPENERS: &[Choice] = &[
-    Choice { value: "vscode", label: "VS Code", help: "点击文件链接时用 VS Code 打开。" },
-    Choice { value: "vscode-insiders", label: "VS Code Insiders", help: "用 VS Code Insiders 打开。" },
-    Choice { value: "windsurf", label: "Windsurf", help: "用 Windsurf 打开。" },
-    Choice { value: "cursor", label: "Cursor", help: "用 Cursor 打开。" },
-    Choice { value: "none", label: "none 不打开", help: "文件链接不可点击。" },
+    Choice {
+        value: "vscode",
+        label: "VS Code",
+        help: "点击文件链接时用 VS Code 打开。",
+    },
+    Choice {
+        value: "vscode-insiders",
+        label: "VS Code Insiders",
+        help: "用 VS Code Insiders 打开。",
+    },
+    Choice {
+        value: "windsurf",
+        label: "Windsurf",
+        help: "用 Windsurf 打开。",
+    },
+    Choice {
+        value: "cursor",
+        label: "Cursor",
+        help: "用 Cursor 打开。",
+    },
+    Choice {
+        value: "none",
+        label: "none 不打开",
+        help: "文件链接不可点击。",
+    },
 ];
 
 pub const WEB_SEARCH_MODES: &[Choice] = &[
-    Choice { value: "disabled", label: "disabled 关闭", help: "不允许联网搜索。" },
-    Choice { value: "cached", label: "cached 缓存", help: "默认值：允许使用缓存的搜索结果。" },
-    Choice { value: "indexed", label: "indexed 索引", help: "使用索引搜索。" },
-    Choice { value: "live", label: "live 实时", help: "实时联网搜索，最新但更慢。" },
+    Choice {
+        value: "disabled",
+        label: "disabled 关闭",
+        help: "不允许联网搜索。",
+    },
+    Choice {
+        value: "cached",
+        label: "cached 缓存",
+        help: "默认值：允许使用缓存的搜索结果。",
+    },
+    Choice {
+        value: "indexed",
+        label: "indexed 索引",
+        help: "使用索引搜索。",
+    },
+    Choice {
+        value: "live",
+        label: "live 实时",
+        help: "实时联网搜索，最新但更慢。",
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -128,41 +239,103 @@ pub const WEB_SEARCH_MODES: &[Choice] = &[
 // ---------------------------------------------------------------------------
 
 pub const MODEL_VISIBILITY: &[Choice] = &[
-    Choice { value: "list", label: "list 显示", help: "在 /model 列表里显示，可正常选择（推荐）。" },
-    Choice { value: "hide", label: "hide 隐藏", help: "不在列表里显示，但仍可以用名字选到。" },
-    Choice { value: "none", label: "none 不可用", help: "完全禁用这个模型。" },
+    Choice {
+        value: "list",
+        label: "list 显示",
+        help: "在 /model 列表里显示，可正常选择（推荐）。",
+    },
+    Choice {
+        value: "hide",
+        label: "hide 隐藏",
+        help: "不在列表里显示，但仍可以用名字选到。",
+    },
+    Choice {
+        value: "none",
+        label: "none 不可用",
+        help: "完全禁用这个模型。",
+    },
 ];
 
 pub const SHELL_TYPES: &[Choice] = &[
-    Choice { value: "shell_command", label: "shell_command 允许执行命令", help: "模型可以运行终端命令（正常用法）。" },
-    Choice { value: "disabled", label: "disabled 禁用命令", help: "禁止模型执行任何命令，只对话和改文件。" },
+    Choice {
+        value: "shell_command",
+        label: "shell_command 允许执行命令",
+        help: "模型可以运行终端命令（正常用法）。",
+    },
+    Choice {
+        value: "disabled",
+        label: "disabled 禁用命令",
+        help: "禁止模型执行任何命令，只对话和改文件。",
+    },
 ];
 
 pub const WEB_SEARCH_TOOL_TYPES: &[Choice] = &[
-    Choice { value: "text", label: "text 只搜文本", help: "联网搜索只返回文本结果。" },
-    Choice { value: "text_and_image", label: "text_and_image 文本+图片", help: "搜索结果里可以包含图片。" },
+    Choice {
+        value: "text",
+        label: "text 只搜文本",
+        help: "联网搜索只返回文本结果。",
+    },
+    Choice {
+        value: "text_and_image",
+        label: "text_and_image 文本+图片",
+        help: "搜索结果里可以包含图片。",
+    },
 ];
 
 pub const TOOL_MODES: &[Choice] = &[
-    Choice { value: "direct", label: "direct 直接调用", help: "模型直接调用工具（最常见）。" },
-    Choice { value: "code_mode", label: "code_mode 代码模式", help: "模型通过写代码来调用工具。" },
-    Choice { value: "code_mode_only", label: "code_mode_only 仅代码模式", help: "只允许通过写代码调用工具。" },
+    Choice {
+        value: "direct",
+        label: "direct 直接调用",
+        help: "模型直接调用工具（最常见）。",
+    },
+    Choice {
+        value: "code_mode",
+        label: "code_mode 代码模式",
+        help: "模型通过写代码来调用工具。",
+    },
+    Choice {
+        value: "code_mode_only",
+        label: "code_mode_only 仅代码模式",
+        help: "只允许通过写代码调用工具。",
+    },
 ];
 
 pub const INPUT_MODALITIES: &[Choice] = &[
-    Choice { value: "text", label: "text 文本", help: "支持发送文字。几乎所有模型都支持。" },
-    Choice { value: "image", label: "image 图片", help: "支持发送截图/图片。做前端或调试 UI 时很有用。" },
-    Choice { value: "audio", label: "audio 音频", help: "支持发送音频。" },
+    Choice {
+        value: "text",
+        label: "text 文本",
+        help: "支持发送文字。几乎所有模型都支持。",
+    },
+    Choice {
+        value: "image",
+        label: "image 图片",
+        help: "支持发送截图/图片。做前端或调试 UI 时很有用。",
+    },
+    Choice {
+        value: "audio",
+        label: "audio 音频",
+        help: "支持发送音频。",
+    },
 ];
 
 pub const TRUNCATION_MODES: &[Choice] = &[
-    Choice { value: "tokens", label: "tokens 按 token 截断", help: "工具输出超过多少 token 就截断。" },
-    Choice { value: "bytes", label: "bytes 按字节截断", help: "工具输出超过多少字节就截断。" },
+    Choice {
+        value: "tokens",
+        label: "tokens 按 token 截断",
+        help: "工具输出超过多少 token 就截断。",
+    },
+    Choice {
+        value: "bytes",
+        label: "bytes 按字节截断",
+        help: "工具输出超过多少字节就截断。",
+    },
 ];
 
-pub const APPLY_PATCH_TOOL_TYPES: &[Choice] = &[
-    Choice { value: "freeform", label: "freeform 自由格式补丁", help: "让模型直接输出补丁文本，兼容性最好（推荐）。" },
-];
+pub const APPLY_PATCH_TOOL_TYPES: &[Choice] = &[Choice {
+    value: "freeform",
+    label: "freeform 自由格式补丁",
+    help: "让模型直接输出补丁文本，兼容性最好（推荐）。",
+}];
 
 // ---------------------------------------------------------------------------
 // Wire protocols (the "三种协议" the user asked for)

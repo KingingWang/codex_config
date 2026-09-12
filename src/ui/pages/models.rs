@@ -38,6 +38,22 @@ enum ModelAction {
 }
 
 pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
+    if let Some(value) = app.doc.as_ref().and_then(|doc| doc.catalog.as_ref())
+        && !catalog::models(value).is_some_and(|models| models.iter().all(Value::is_object))
+    {
+        widgets::note(
+            ui,
+            "模型目录结构不正确：需要 models 数组，且每个模型都必须是 JSON 对象。原始内容已保留，请修复后再编辑模型。",
+            theme::DANGER,
+        );
+        if widgets::primary_button(ui, "转到源文件修复").clicked() {
+            if !app.has_raw_draft() {
+                app.raw_tab_is_catalog = true;
+            }
+            app.page = crate::page::Page::Raw;
+        }
+        return;
+    }
     let (has_catalog, catalog_path_text, rows) = {
         let Some(doc) = &app.doc else { return };
         let active_model = doc.config.str_at(&["model"]).unwrap_or_default();
@@ -79,10 +95,10 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
         return;
     }
     let provider_options = app.provider_options();
-    if app.editing_model.is_none() {
-        if let Some(row) = rows.iter().find(|row| row.active).or(rows.first()) {
-            app.select_model(row.index);
-        }
+    if app.editing_model.is_none()
+        && let Some(row) = rows.iter().find(|row| row.active).or(rows.first())
+    {
+        app.select_model(row.index);
     }
     let list_width = (ui.available_width() * 0.27).clamp(224.0, 280.0);
     let height = (ui.available_height() - 20.0).max(200.0);
@@ -336,18 +352,7 @@ fn no_catalog(app: &mut App, ui: &mut Ui, path: Option<String>) {
                 });
             }
             if widgets::ghost_button(ui, "选择已有文件…").clicked() {
-                let home = app
-                    .doc
-                    .as_ref()
-                    .map(|d| d.codex_home.clone())
-                    .unwrap_or_default();
-                if let Some(picked) = rfd::FileDialog::new()
-                    .add_filter("JSON", &["json"])
-                    .set_directory(&home)
-                    .pick_file()
-                {
-                    app.set_catalog_path(picked);
-                }
+                app.select_catalog_file();
             }
         });
         ui.add_space(10.0);
@@ -736,7 +741,7 @@ fn editor(
             ];
             for (key, label, value) in flags.iter_mut() {
                 if ui
-                    .checkbox(*value, RichText::new(*label).size(12.5).color(theme::TEXT_DIM))
+                    .checkbox(value, RichText::new(*label).size(12.5).color(theme::TEXT_DIM))
                     .on_hover_text(format!("对应 JSON 字段：{}", *key))
                     .changed()
                 {

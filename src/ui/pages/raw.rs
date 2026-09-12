@@ -5,7 +5,6 @@ use toml_edit::DocumentMut;
 
 use crate::app::App;
 use crate::doc::pretty_json;
-use crate::doc::toml_ext::TomlPathExt;
 use crate::ui::icons;
 use crate::ui::theme;
 use crate::ui::widgets;
@@ -151,7 +150,7 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        let can_apply = validity.is_ok() && app.raw_buffer != origin;
+        let can_apply = validity.is_ok() && app.raw_buffer != origin && origin == current;
         ui.add_enabled_ui(can_apply, |ui| {
             if widgets::primary_button(ui, &format!("{} 应用到编辑器", icons::CHECK)).clicked()
             {
@@ -169,22 +168,16 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
                 };
                 match result {
                     Ok(()) => {
-                        app.raw_origin = buffer;
-                        if !is_catalog && let Some(doc) = &mut app.doc {
-                            let desired_path = doc
-                                .config
-                                .str_at(&["model_catalog_json"])
-                                .filter(|value| !value.trim().is_empty())
-                                .map(|value| doc.resolve_against_home(&value));
-                            if desired_path != doc.catalog_path {
-                                doc.reload_catalog();
-                            }
+                        if let Some(doc) = &app.doc {
+                            let applied = if is_catalog {
+                                doc.catalog_text()
+                            } else {
+                                doc.config_text()
+                            };
+                            app.raw_buffer.clone_from(&applied);
+                            app.raw_origin = applied;
                         }
-                        app.editing_model = None;
-                        app.editing_provider = None;
-                        app.provider_editor = None;
-                        app.editing_profile = None;
-                        app.profile_editor = None;
+                        app.reset_editors();
                         app.toast_info("已应用，其它页面已经同步");
                     }
                     Err(err) => app.toast_error(format!("应用失败：{err:#}")),
@@ -194,10 +187,11 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         if widgets::ghost_button(ui, "\u{21BB} 放弃这里的修改").clicked() {
             app.raw_buffer = origin.clone();
         }
-        if is_catalog && widgets::ghost_button(ui, "格式化 JSON").clicked() {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&app.raw_buffer) {
-                app.raw_buffer = pretty_json(&value);
-            }
+        if is_catalog
+            && widgets::ghost_button(ui, "格式化 JSON").clicked()
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&app.raw_buffer)
+        {
+            app.raw_buffer = pretty_json(&value);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(

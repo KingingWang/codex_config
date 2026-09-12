@@ -85,9 +85,7 @@ pub fn set(value: &mut Value, path: &[&str], new: Value) {
 }
 
 pub fn remove(value: &mut Value, path: &[&str]) -> Option<Value> {
-    let Some((last, parents)) = path.split_last() else {
-        return None;
-    };
+    let (last, parents) = path.split_last()?;
     let mut current = value;
     for key in parents {
         current = current.get_mut(*key)?;
@@ -161,6 +159,7 @@ pub fn reasoning_description(level: &str) -> String {
         "xhigh" => "超高强度推理，适合难题".into(),
         "max" => "最大推理强度，最难的问题".into(),
         "ultra" => "最大推理强度，并自动把任务拆分给子代理".into(),
+        "persistent" => "持续执行任务的推理强度".into(),
         other => format!("自定义等级 {other}"),
     }
     .to_string()
@@ -168,7 +167,15 @@ pub fn reasoning_description(level: &str) -> String {
 
 /// Every reasoning level Codex knows about, from fastest to deepest.
 pub const ALL_REASONING_LEVELS: &[&str] = &[
-    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+    "persistent",
 ];
 
 /// A minimal but valid model entry, used by "新建模型".
@@ -194,16 +201,22 @@ pub fn new_model_template(slug: &str, display_name: &str, provider: Option<&str>
     model.insert("shell_type".into(), Value::String("shell_command".into()));
     model.insert("context_window".into(), Value::Number(200_000.into()));
     model.insert("max_context_window".into(), Value::Number(200_000.into()));
-    model.insert("input_modalities".into(), Value::Array(vec![
-        Value::String("text".into()),
-        Value::String("image".into()),
-    ]));
+    model.insert(
+        "input_modalities".into(),
+        Value::Array(vec![
+            Value::String("text".into()),
+            Value::String("image".into()),
+        ]),
+    );
     let mut truncation = JsonMap::new();
     truncation.insert("mode".into(), Value::String("tokens".into()));
     truncation.insert("limit".into(), Value::Number(25_600.into()));
     model.insert("truncation_policy".into(), Value::Object(truncation));
     model.insert("support_verbosity".into(), Value::Bool(false));
-    model.insert("default_reasoning_summary".into(), Value::String("auto".into()));
+    model.insert(
+        "default_reasoning_summary".into(),
+        Value::String("auto".into()),
+    );
     model.insert("experimental_supported_tools".into(), Value::Array(vec![]));
     model.insert(
         "default_reasoning_level".into(),

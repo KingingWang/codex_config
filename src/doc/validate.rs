@@ -71,6 +71,56 @@ pub fn validate(doc: &Document) -> Vec<Issue> {
     let known_providers =
         |id: &str| provider_ids.contains(id) || BUILTIN_PROVIDER_IDS.contains(&id);
 
+    for namespace in ["profiles", "model_providers"] {
+        if let Some(item) = doc.config.item_at(&[namespace])
+            && item.as_table_like().is_none()
+        {
+            issues.push(Issue::error(
+                Page::Raw,
+                format!("{namespace} 必须是一个表"),
+                "请在源文件中修复此配置结构。",
+            ));
+        }
+        for id in doc.config.keys_at(&[namespace]) {
+            if doc
+                .config
+                .item_at(&[namespace, &id])
+                .and_then(toml_edit::Item::as_table_like)
+                .is_none()
+            {
+                issues.push(Issue::error(
+                    Page::Raw,
+                    format!("{namespace} {id} 不是对象"),
+                    "每个条目必须是 TOML 表。",
+                ));
+            }
+        }
+    }
+    let profile = doc.config.str_at(&["profile"]).unwrap_or_default();
+    if !profile.is_empty() && !doc.profile_ids().contains(&profile) {
+        issues.push(Issue::error(
+            Page::Profiles,
+            "当前选中的 profile 不存在",
+            format!("请创建配置档 {profile}，或清除 profile 选择。"),
+        ));
+    }
+    for id in doc.profile_ids() {
+        if let Some(provider) = doc.config.str_at(&["profiles", &id, "model_provider"])
+            && !known_providers(&provider)
+        {
+            issues.push(Issue::error(
+                Page::Profiles,
+                format!("profile {id} 的服务商不存在"),
+                format!("model_provider = \"{provider}\" 没有对应的定义。"),
+            ));
+        }
+    }
+    let effective = |key: &str| {
+        doc.config
+            .str_at(&["profiles", &profile, key])
+            .or_else(|| doc.config.str_at(&[key]))
+    };
+
     // --- providers ---------------------------------------------------------
     for provider in providers::all(&doc.config) {
         if provider.base_url.is_empty() && !BUILTIN_PROVIDER_IDS.contains(&provider.id.as_str()) {
@@ -122,7 +172,10 @@ pub fn validate(doc: &Document) -> Vec<Issue> {
             ));
         }
 
-        if !provider.env_key.is_empty() && std::env::var(&provider.env_key).is_err() {
+        if !doc.is_remote()
+            && !provider.env_key.is_empty()
+            && std::env::var(&provider.env_key).is_err()
+        {
             issues.push(Issue::info(
                 Page::Providers,
                 format!("环境变量 {} 当前没有值", provider.env_key),
@@ -138,6 +191,8 @@ pub fn validate(doc: &Document) -> Vec<Issue> {
         if provider.bearer_token.is_empty()
             && provider.env_key.is_empty()
             && !provider.requires_openai_auth
+            && !provider.command_auth
+            && !provider.aws_auth
             && !provider.base_url.contains("localhost")
             && !provider.base_url.contains("127.0.0.1")
             && !provider.base_url.is_empty()
@@ -151,7 +206,7 @@ pub fn validate(doc: &Document) -> Vec<Issue> {
     }
 
     // --- active model / provider -------------------------------------------
-    let active_provider = doc.config.str_at(&["model_provider"]).unwrap_or_default();
+    let active_provider = effective("model_provider").unwrap_or_default();
     if !active_provider.is_empty() && !known_providers(&active_provider) {
         issues.push(Issue::error(
             Page::Overview,
@@ -163,9 +218,19 @@ pub fn validate(doc: &Document) -> Vec<Issue> {
         ));
     }
 
-    let active_model = doc.config.str_at(&["model"]).unwrap_or_default();
+    let active_model = effective("model").unwrap_or_default();
     let catalog_models = doc.catalog.as_ref();
     if let Some(catalog) = catalog_models {
+        if !catalog
+            .get("models")
+            .is_some_and(serde_json::Value::is_array)
+        {
+            issues.push(Issue::error(
+                Page::Models,
+                "模型目录需要 models 数组",
+                "请在源文件中修复模型目录结构。",
+            ));
+        }
         let slugs = catalog::slugs(catalog);
         if !active_model.is_empty() && !slugs.iter().any(|s| s == &active_model) {
             issues.push(Issue::warn(
@@ -192,30 +257,46 @@ Codex 会用内置的兜底信息，可能表现不正常。建议去「模型�
 
         // every model's provider must exist
         if let Some(list) = catalog::models(catalog) {
-            for model in list {
+            for (index, model) in list.iter().enumerate() {
+                if !model.is_object() {
+                    issues.push(Issue::error(
+                        Page::Models,
+                        format!("第 {} 个模型不是对象", index + 1),
+                        "每个模型必须是 JSON 对象。",
+                    ));
+                    continue;
+                }
                 let slug = catalog::slug_of(model);
-                if let Some(provider) = model.get("provider").and_then(|v| v.as_str()) {
-                    if !provider.is_empty() && !known_providers(provider) {
-                        issues.push(Issue::warn(
-                            Page::Models,
-                            format!("模型 {slug} 绑定的服务商不存在"),
-                            format!(
-                                "模型 {slug} 写着 provider = \"{provider}\"，但配置里没有这个服务商。\
+                if slug.trim().is_empty() {
+                    issues.push(Issue::error(
+                        Page::Models,
+                        format!("第 {} 个模型缺少 slug", index + 1),
+                        "slug 必须是非空字符串。",
+                    ));
+                }
+                if let Some(provider) = model.get("provider").and_then(|v| v.as_str())
+                    && !provider.is_empty()
+                    && !known_providers(provider)
+                {
+                    issues.push(Issue::warn(
+                        Page::Models,
+                        format!("模型 {slug} 绑定的服务商不存在"),
+                        format!(
+                            "模型 {slug} 写着 provider = \"{provider}\"，但配置里没有这个服务商。\
 选中它时会连不上，请去「服务商」页添加 {provider}，或在模型编辑里换一个。"
-                            ),
-                        ));
-                    }
+                        ),
+                    ));
                 }
             }
         }
 
         // reasoning effort compatibility
-        if let Some(effort) = doc.config.str_at(&["model_reasoning_effort"])
+        if let Some(effort) = effective("model_reasoning_effort")
             && let Some(index) = catalog::find_index(catalog, &active_model)
             && let Some(model) = catalog::models(catalog).and_then(|list| list.get(index))
         {
             let levels = catalog::reasoning_levels(model);
-            if !levels.is_empty() && !levels.iter().any(|l| *l == effort) {
+            if !levels.is_empty() && !levels.contains(&effort) {
                 issues.push(Issue::warn(
                     Page::Overview,
                     "推理强度和模型不匹配",
@@ -244,7 +325,7 @@ Codex 会用内置的兜底信息，可能表现不正常。建议去「模型�
     }
 
     // --- safety -------------------------------------------------------------
-    if doc.config.str_at(&["sandbox_mode"]).as_deref() == Some("danger-full-access") {
+    if effective("sandbox_mode").as_deref() == Some("danger-full-access") {
         issues.push(Issue::warn(
             Page::Overview,
             "当前是完全访问模式",
@@ -252,7 +333,7 @@ Codex 会用内置的兜底信息，可能表现不正常。建议去「模型�
 只在你完全信任的机器上这样用；日常推荐 workspace-write。",
         ));
     }
-    if doc.config.str_at(&["approval_policy"]).as_deref() == Some("never") {
+    if effective("approval_policy").as_deref() == Some("never") {
         issues.push(Issue::warn(
             Page::Overview,
             "审批策略是「从不询问」",

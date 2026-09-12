@@ -3,10 +3,10 @@
 //! Only the keys the user actually touches are written back, so any field this
 //! GUI does not know about survives a round trip.
 
-use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{DocumentMut, InlineTable, Item, Value};
 
 use crate::doc::schema::WireApi;
-use crate::doc::toml_ext::{read_string_map, TomlPathExt};
+use crate::doc::toml_ext::{TomlPathExt, read_string_map};
 
 /// A snapshot of one provider, used for rendering list rows and validation.
 #[derive(Debug, Clone, Default)]
@@ -20,6 +20,8 @@ pub struct ProviderView {
     pub bearer_token: String,
     pub chat_stream: bool,
     pub requires_openai_auth: bool,
+    pub command_auth: bool,
+    pub aws_auth: bool,
     pub supports_websockets: bool,
     pub request_max_retries: Option<i64>,
     pub stream_max_retries: Option<i64>,
@@ -64,7 +66,11 @@ impl ProviderView {
 
     /// How this provider authenticates, in plain words.
     pub fn auth_summary(&self) -> String {
-        if !self.env_key.is_empty() {
+        if self.command_auth {
+            "使用命令获取 Token（请在源文件中管理）".to_string()
+        } else if self.aws_auth {
+            "使用 AWS 认证（请在源文件中管理）".to_string()
+        } else if !self.env_key.is_empty() {
             format!("读取环境变量 {}", self.env_key)
         } else if !self.bearer_token.is_empty() {
             "配置文件里直接写了 Token".to_string()
@@ -82,7 +88,7 @@ pub fn ids(config: &DocumentMut) -> Vec<String> {
 
 pub fn view(config: &DocumentMut, id: &str) -> Option<ProviderView> {
     let path = ["model_providers", id];
-    config.table_at(&path)?;
+    config.item_at(&path)?.as_table_like()?;
     let get_str = |key: &str| {
         config
             .str_at(&["model_providers", id, key])
@@ -96,7 +102,7 @@ pub fn view(config: &DocumentMut, id: &str) -> Option<ProviderView> {
     let get_int = |key: &str| config.int_at(&["model_providers", id, key]);
 
     let mut extra_keys = Vec::new();
-    if let Some(table) = config.table_at(&path) {
+    if let Some(table) = config.item_at(&path).and_then(Item::as_table_like) {
         for (key, _) in table.iter() {
             if !KNOWN_KEYS.contains(&key) {
                 extra_keys.push(key.to_string());
@@ -121,13 +127,19 @@ pub fn view(config: &DocumentMut, id: &str) -> Option<ProviderView> {
         bearer_token: get_str("experimental_bearer_token"),
         chat_stream: get_bool("chat_stream"),
         requires_openai_auth: get_bool("requires_openai_auth"),
+        command_auth: config.item_at(&["model_providers", id, "auth"]).is_some(),
+        aws_auth: config.item_at(&["model_providers", id, "aws"]).is_some(),
         supports_websockets: get_bool("supports_websockets"),
         request_max_retries: get_int("request_max_retries"),
         stream_max_retries: get_int("stream_max_retries"),
         stream_idle_timeout_ms: get_int("stream_idle_timeout_ms"),
         headers: read_string_map(config.item_at(&["model_providers", id, "http_headers"])),
         query_params: read_string_map(config.item_at(&["model_providers", id, "query_params"])),
-        env_http_headers: read_string_map(config.item_at(&["model_providers", id, "env_http_headers"])),
+        env_http_headers: read_string_map(config.item_at(&[
+            "model_providers",
+            id,
+            "env_http_headers",
+        ])),
         extra_keys,
     })
 }
@@ -141,7 +153,8 @@ pub fn all(config: &DocumentMut) -> Vec<ProviderView> {
 
 pub fn exists(config: &DocumentMut, id: &str) -> bool {
     config
-        .table_at(&["model_providers", id])
+        .item_at(&["model_providers", id])
+        .and_then(Item::as_table_like)
         .is_some()
 }
 
@@ -158,21 +171,14 @@ pub fn rename(config: &mut DocumentMut, old_id: &str, new_id: &str) -> bool {
     if old_id == new_id || exists(config, new_id) {
         return false;
     }
-    let Some(table) = config
-        .table_at(&["model_providers", old_id])
-        .cloned()
-    else {
+    let Some(item) = config.item_at(&["model_providers", old_id]).cloned() else {
         return false;
     };
-    let table = {
-        let mut t = Table::new();
-        for (key, item) in table.iter() {
-            t.insert(key, item.clone());
-        }
-        t
-    };
+    if item.as_table_like().is_none() {
+        return false;
+    }
     remove(config, old_id);
-    config.set_item_at(&["model_providers", new_id], Item::Table(table));
+    config.set_item_at(&["model_providers", new_id], item);
     true
 }
 
@@ -218,7 +224,7 @@ pub fn set_map(config: &mut DocumentMut, id: &str, key: &str, entries: &[(String
     }
     let mut table = InlineTable::new();
     for (name, value) in cleaned {
-        table.insert(name.trim(), Value::from(value.clone()).into());
+        table.insert(name.trim(), Value::from(value.clone()));
     }
     config.set_value_at(&path, Value::InlineTable(table));
 }
@@ -226,7 +232,11 @@ pub fn set_map(config: &mut DocumentMut, id: &str, key: &str, entries: &[(String
 /// A free id like `openai-relay`, `my-relay-2`.
 pub fn suggest_id(config: &DocumentMut, wanted: &str) -> String {
     let base = slugify(wanted);
-    let base = if base.is_empty() { "provider".to_string() } else { base };
+    let base = if base.is_empty() {
+        "provider".to_string()
+    } else {
+        base
+    };
     if !exists(config, &base) {
         return base;
     }
