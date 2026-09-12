@@ -10,7 +10,6 @@ use toml_edit::Value as TomlValue;
 use crate::app::App;
 use crate::doc::schema::Choice;
 use crate::doc::toml_ext::TomlPathExt;
-use crate::ui::icons;
 use crate::ui::theme;
 use crate::ui::widgets::{self, FieldSpec};
 
@@ -37,16 +36,28 @@ pub fn read_str(app: &App, path: &[&str]) -> String {
 }
 
 /// Free text setting (model_catalog_json, notify path, ...).
-pub fn str_field(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help: &str, placeholder: &str, mono: bool) {
+pub fn str_field(
+    app: &mut App,
+    ui: &mut Ui,
+    path: &[&str],
+    label: &str,
+    help: &str,
+    placeholder: &str,
+    mono: bool,
+) {
     let mut value = read_str(app, path);
     let id = widget_id(path, "-s");
-    let changed = widgets::field(ui, FieldSpec::new(label, path.last().unwrap_or(&""), help), |ui| {
-        if mono {
-            widgets::mono_field(ui, &id, &mut value, placeholder)
-        } else {
-            widgets::text_field(ui, &id, &mut value, placeholder)
-        }
-    });
+    let changed = widgets::field(
+        ui,
+        FieldSpec::new(label, path.last().unwrap_or(&""), help),
+        |ui| {
+            if mono {
+                widgets::mono_field(ui, &id, &mut value, placeholder)
+            } else {
+                widgets::text_field(ui, &id, &mut value, placeholder)
+            }
+        },
+    );
     if changed {
         write_str(app, path, &value);
     }
@@ -61,12 +72,12 @@ pub fn int_field(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help: &
         .map(|v| v.to_string())
         .unwrap_or_default();
     let id = widget_id(path, "-i");
-    let changed = widgets::field(ui, FieldSpec::new(label, path.last().unwrap_or(&""), help), |ui| {
-        widgets::opt_int_field(ui, &id, &mut buffer)
-    });
-    if changed
-        && let Some(doc) = &mut app.doc
-    {
+    let changed = widgets::field(
+        ui,
+        FieldSpec::new(label, path.last().unwrap_or(&""), help),
+        |ui| widgets::opt_int_field(ui, &id, &mut buffer),
+    );
+    if changed && let Some(doc) = &mut app.doc {
         match widgets::parse_opt_int(&buffer) {
             Some(value) => doc.config.set_value_at(path, TomlValue::from(value)),
             None => {
@@ -80,12 +91,21 @@ pub fn int_field(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help: &
 }
 
 /// Enum setting rendered as a dropdown of `Choice`s.
-pub fn choice_field(app: &mut App, ui: &mut Ui, path: &[&str], choices: &[Choice], label: &str, help: &str) {
+pub fn choice_field(
+    app: &mut App,
+    ui: &mut Ui,
+    path: &[&str],
+    choices: &[Choice],
+    label: &str,
+    help: &str,
+) {
     let mut value = read_str(app, path);
     let id = widget_id(path, "-c");
-    let changed = widgets::field(ui, FieldSpec::new(label, path.last().unwrap_or(&""), help), |ui| {
-        widgets::choice_dropdown(ui, &id, &mut value, choices, true)
-    });
+    let changed = widgets::field(
+        ui,
+        FieldSpec::new(label, path.last().unwrap_or(&""), help),
+        |ui| widgets::choice_dropdown(ui, &id, &mut value, choices, true),
+    );
     if changed {
         write_str(app, path, &value);
     }
@@ -94,8 +114,16 @@ pub fn choice_field(app: &mut App, ui: &mut Ui, path: &[&str], choices: &[Choice
 /// Three state boolean: unset / true / false.
 pub fn bool_field(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help: &str) {
     const BOOL_CHOICES: &[Choice] = &[
-        Choice { value: "true", label: "开启 (true)", help: "明确写入 true。" },
-        Choice { value: "false", label: "关闭 (false)", help: "明确写入 false。" },
+        Choice {
+            value: "true",
+            label: "开启 (true)",
+            help: "明确写入 true。",
+        },
+        Choice {
+            value: "false",
+            label: "关闭 (false)",
+            help: "明确写入 false。",
+        },
     ];
     let mut value = app
         .doc
@@ -104,12 +132,12 @@ pub fn bool_field(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help: 
         .map(|v| v.to_string())
         .unwrap_or_default();
     let id = widget_id(path, "-b");
-    let changed = widgets::field(ui, FieldSpec::new(label, path.last().unwrap_or(&""), help), |ui| {
-        widgets::choice_dropdown(ui, &id, &mut value, BOOL_CHOICES, true)
-    });
-    if changed
-        && let Some(doc) = &mut app.doc
-    {
+    let changed = widgets::field(
+        ui,
+        FieldSpec::new(label, path.last().unwrap_or(&""), help),
+        |ui| widgets::choice_dropdown(ui, &id, &mut value, BOOL_CHOICES, true),
+    );
+    if changed && let Some(doc) = &mut app.doc {
         match value.as_str() {
             "true" => doc.config.set_value_at(path, TomlValue::from(true)),
             "false" => doc.config.set_value_at(path, TomlValue::from(false)),
@@ -125,23 +153,21 @@ pub fn dynamic_choice_field(
     app: &mut App,
     ui: &mut Ui,
     path: &[&str],
-    options: Vec<(String, String)>,
+    mut options: Vec<(String, String)>,
     label: &str,
     help: &str,
     placeholder: &str,
 ) {
     let mut value = read_str(app, path);
     let id = widget_id(path, "-d");
-    let changed = widgets::field(ui, FieldSpec::new(label, path.last().unwrap_or(&""), help), |ui| {
-        let mut row = widgets::string_dropdown(ui, &id, &mut value, &options, placeholder);
-        if !value.is_empty()
-            && widgets::link_button(ui, &format!("{} 清除，改回默认", icons::CLOSE), theme::TEXT_MUTED).clicked()
-        {
-            value.clear();
-            row = true;
-        }
-        row
-    });
+    if !options.iter().any(|(value, _)| value.is_empty()) {
+        options.insert(0, (String::new(), placeholder.to_string()));
+    }
+    let changed = widgets::field(
+        ui,
+        FieldSpec::new(label, path.last().unwrap_or(&""), help),
+        |ui| widgets::string_dropdown(ui, &id, &mut value, &options, placeholder),
+    );
     if changed {
         write_str(app, path, &value);
     }
@@ -154,9 +180,7 @@ pub fn tri_row(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help: &st
     let changed = widgets::compact_row(ui, label, path.last().unwrap_or(&""), |ui| {
         widgets::tri_state(ui, &id, &mut value)
     });
-    if changed
-        && let Some(doc) = &mut app.doc
-    {
+    if changed && let Some(doc) = &mut app.doc {
         match value {
             Some(true) => doc.config.set_value_at(path, TomlValue::from(true)),
             Some(false) => doc.config.set_value_at(path, TomlValue::from(false)),
@@ -166,18 +190,20 @@ pub fn tri_row(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help: &st
         }
     }
     if !help.is_empty() {
-        ui.label(
-            RichText::new(help)
-                .size(11.5)
-                .color(theme::TEXT_MUTED)
-                ,
-        );
+        ui.label(RichText::new(help).size(11.5).color(theme::TEXT_MUTED));
     }
     ui.add_space(3.0);
 }
 
 /// String array stored in the config, edited as one entry per line.
-pub fn lines_field(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help: &str, rows: usize) {
+pub fn lines_field(
+    app: &mut App,
+    ui: &mut Ui,
+    path: &[&str],
+    label: &str,
+    help: &str,
+    rows: usize,
+) {
     let current: Vec<String> = app
         .doc
         .as_ref()
@@ -185,12 +211,12 @@ pub fn lines_field(app: &mut App, ui: &mut Ui, path: &[&str], label: &str, help:
         .unwrap_or_default();
     let mut buffer = current.join("\n");
     let id = widget_id(path, "-l");
-    let changed = widgets::field(ui, FieldSpec::new(label, path.last().unwrap_or(&""), help), |ui| {
-        widgets::multiline_field(ui, &id, &mut buffer, rows)
-    });
-    if changed
-        && let Some(doc) = &mut app.doc
-    {
+    let changed = widgets::field(
+        ui,
+        FieldSpec::new(label, path.last().unwrap_or(&""), help),
+        |ui| widgets::multiline_field(ui, &id, &mut buffer, rows),
+    );
+    if changed && let Some(doc) = &mut app.doc {
         let items: Vec<String> = buffer
             .lines()
             .map(|line| line.trim().trim_matches(',').trim().to_string())

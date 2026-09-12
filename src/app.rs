@@ -1,12 +1,14 @@
 //! Application shell: navigation, save/revert flow, dialogs and toasts.
 
+use egui::{
+    Align, Color32, Context, CornerRadius, Layout, Margin, RichText, ScrollArea, Stroke, Ui,
+};
 use std::path::PathBuf;
-use egui::{Align, Color32, Context, CornerRadius, Layout, Margin, RichText, ScrollArea, Stroke, Ui};
 
+use crate::doc::Document;
 use crate::doc::catalog;
 use crate::doc::providers as provider_ops;
 use crate::doc::validate::{self, Issue, Severity};
-use crate::doc::Document;
 use crate::editors::{ModelEditor, ProfileEditor, ProviderEditor};
 use crate::net::{self, HttpOutcome, OutcomeSlot, Probe};
 use crate::page::Page;
@@ -26,16 +28,34 @@ pub enum Dialog {
         provider: String,
         clone_from: String,
     },
-    RenameProvider { old: String, buffer: String },
-    RenameModel { index: usize, buffer: String },
+    RenameProvider {
+        old: String,
+        buffer: String,
+    },
+    RenameModel {
+        index: usize,
+        buffer: String,
+    },
     DeleteProvider(String),
-    DeleteModel { index: usize, slug: String },
+    DeleteModel {
+        index: usize,
+        slug: String,
+    },
     DeleteProfile(String),
-    CreateCatalog { filename: String },
-    ImportRemote { provider: String, models: Vec<String> },
-    ChangeHome { buffer: String },
+    CreateCatalog {
+        filename: String,
+    },
+    ImportRemote {
+        provider: String,
+        models: Vec<String>,
+    },
+    ChangeHome {
+        buffer: String,
+    },
     /// Scan-and-restart the background app-server processes so edits take effect.
     RestartServers,
+    DiscardChanges,
+    ExitUnsaved,
 }
 
 #[derive(Debug)]
@@ -82,6 +102,8 @@ pub struct App {
     pub restart_selected: Vec<bool>,
     pub restart_results: Vec<RestartOutcome>,
     pub restart_scanned: bool,
+    pub saved_needs_restart: bool,
+    pub close_confirmed: bool,
 }
 
 impl App {
@@ -94,7 +116,8 @@ impl App {
     pub fn with_home(cc: &eframe::CreationContext<'_>, home: PathBuf) -> Self {
         let font_note = theme::install(&cc.egui_ctx)
             .unwrap_or_else(|| "未找到系统中文字体，界面中文可能显示为方块".to_string());
-        cc.egui_ctx.set_pixels_per_point(cc.egui_ctx.pixels_per_point().max(1.0));
+        cc.egui_ctx
+            .set_pixels_per_point(cc.egui_ctx.pixels_per_point().max(1.0));
 
         let mut app = Self {
             doc: None,
@@ -126,6 +149,8 @@ impl App {
             restart_selected: Vec::new(),
             restart_results: Vec::new(),
             restart_scanned: false,
+            saved_needs_restart: false,
+            close_confirmed: false,
         };
         app.load(home);
         app
@@ -145,7 +170,9 @@ impl App {
                     .success(format!("已载入 {path}"))
                     .duration(Some(std::time::Duration::from_secs(4)));
                 for note in notes {
-                    self.toasts.warning(note).duration(Some(std::time::Duration::from_secs(8)));
+                    self.toasts
+                        .warning(note)
+                        .duration(Some(std::time::Duration::from_secs(8)));
                 }
             }
             Err(err) => {
@@ -207,10 +234,15 @@ impl App {
 
     /// Push the current model editor back into the catalog.
     pub fn commit_model_editor(&mut self) {
-        let Some(index) = self.editing_model else { return };
+        let Some(index) = self.editing_model else {
+            return;
+        };
         let editor = self.model_editor.clone();
         if let Some(doc) = &mut self.doc
-            && let Some(list) = doc.catalog.as_mut().and_then(|value| catalog::models_mut(value))
+            && let Some(list) = doc
+                .catalog
+                .as_mut()
+                .and_then(|value| catalog::models_mut(value))
             && let Some(model) = list.get_mut(index)
         {
             editor.write_to(model);
@@ -245,6 +277,11 @@ impl App {
     }
 
     pub fn save(&mut self) {
+        if self.has_raw_draft() {
+            self.toast_error("源文件还有未应用的内容，请先「应用到编辑器」，再保存配置。");
+            self.page = Page::Raw;
+            return;
+        }
         let errors = self
             .issues()
             .into_iter()
@@ -253,7 +290,11 @@ impl App {
         if !errors.is_empty() {
             let first = &errors[0];
             self.toasts
-                .error(format!("还有 {} 个错误没解决：{}", errors.len(), first.title))
+                .error(format!(
+                    "还有 {} 个错误没解决：{}",
+                    errors.len(),
+                    first.title
+                ))
                 .duration(Some(std::time::Duration::from_secs(8)));
             self.page = first.page;
             return;
@@ -264,6 +305,7 @@ impl App {
                 if report.written.is_empty() {
                     self.toasts.info("没有需要保存的修改");
                 } else {
+                    self.saved_needs_restart = true;
                     let backups = report.backups.len();
                     self.toasts
                         .success(format!(
@@ -292,6 +334,22 @@ impl App {
     }
 
     // -- misc actions -------------------------------------------------------
+
+    pub fn has_raw_draft(&self) -> bool {
+        !self.raw_source.is_empty() && self.raw_buffer != self.raw_origin
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.has_raw_draft() || self.doc.as_ref().is_some_and(Document::dirty)
+    }
+
+    pub fn request_discard(&mut self) {
+        if self.has_unsaved_changes() {
+            self.dialog = Some(Dialog::DiscardChanges);
+        } else {
+            self.discard();
+        }
+    }
 
     pub fn toast_info(&mut self, text: impl Into<String>) {
         self.toasts.info(text.into());
@@ -338,7 +396,9 @@ impl App {
         self.restart_results = results;
         if restarted > 0 {
             self.toasts
-                .success(format!("已重启 {restarted} 个 App Server，宿主会自动拉起读取新配置的服务"))
+                .success(format!(
+                    "已重启 {restarted} 个 App Server，宿主会自动拉起读取新配置的服务"
+                ))
                 .duration(Some(std::time::Duration::from_secs(6)));
         }
         // Refresh the list so the user sees the new PIDs once hosts respawn.
@@ -351,7 +411,13 @@ impl App {
         }
     }
 
-    pub fn start_probe(&mut self, provider_id: &str, kind: Probe, model: Option<String>, ctx: &Context) {
+    pub fn start_probe(
+        &mut self,
+        provider_id: &str,
+        kind: Probe,
+        model: Option<String>,
+        ctx: &Context,
+    ) {
         let Some(doc) = &self.doc else { return };
         let Some(view) = provider_ops::view(&doc.config, provider_id) else {
             self.toast_error("找不到这个服务商，先保存一次再试");
@@ -412,14 +478,20 @@ impl App {
             if let Some(list) = catalog::models(catalog) {
                 if let Some(model) = list
                     .iter()
-                    .find(|m| m.get("slug").and_then(serde_json::Value::as_str) == Some(active.as_str()))
+                    .find(|m| {
+                        m.get("slug").and_then(serde_json::Value::as_str) == Some(active.as_str())
+                    })
                     .or_else(|| {
                         list.iter().find(|m| {
-                            m.get("provider").and_then(serde_json::Value::as_str) == Some(provider_id)
+                            m.get("provider").and_then(serde_json::Value::as_str)
+                                == Some(provider_id)
                         })
                     })
                 {
-                    return model.get("slug").and_then(serde_json::Value::as_str).map(str::to_string);
+                    return model
+                        .get("slug")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
                 }
             }
         }
@@ -432,6 +504,13 @@ use crate::doc::toml_ext::TomlPathExt;
 impl eframe::App for App {
     fn ui(&mut self, root: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
+        if ctx.input(|input| input.viewport().close_requested())
+            && self.has_unsaved_changes()
+            && !self.close_confirmed
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.dialog = Some(Dialog::ExitUnsaved);
+        }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save();
         }
@@ -447,27 +526,34 @@ impl eframe::App for App {
             }
         }
 
-        self.top_bar(root);
         self.sidebar(root);
+        self.top_bar(root);
+        self.status_bar(root);
 
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
                     .fill(theme::BG)
-                    .inner_margin(Margin::symmetric(22, 18)),
+                    .inner_margin(Margin::symmetric(28, 22)),
             )
             .show(root, |ui| {
                 if self.doc.is_none() {
                     self.error_page(ui);
                     return;
                 }
-                widgets::page_header(ui, self.page.icon(), self.page.title(), self.page.subtitle());
+                widgets::page_header(
+                    ui,
+                    self.page.icon(),
+                    self.page.title(),
+                    self.page.subtitle(),
+                );
                 match self.page {
                     // These two manage their own split view and scrolling.
                     Page::Models => pages::models::show(self, ui, &ctx),
                     Page::Providers => pages::providers::show(self, ui, &ctx),
                     page => {
                         ScrollArea::vertical()
+                            .id_salt(("page-scroll", page))
                             .auto_shrink([false, false])
                             .show(ui, |ui| match page {
                                 Page::Overview => pages::overview::show(self, ui, &ctx),
@@ -476,7 +562,6 @@ impl eframe::App for App {
                                 Page::Raw => pages::raw::show(self, ui, &ctx),
                                 Page::Models | Page::Providers => {}
                             });
-                        ui.add_space(40.0);
                     }
                 }
             });
@@ -490,11 +575,21 @@ impl eframe::App for App {
 
 impl App {
     fn error_page(&mut self, ui: &mut Ui) {
-        widgets::page_header(ui, icons::WARNING, "无法载入配置", "先解决下面的问题，才能开始编辑");
+        widgets::page_header(
+            ui,
+            icons::WARNING,
+            "无法载入配置",
+            "先解决下面的问题，才能开始编辑",
+        );
         widgets::card(ui, |ui| {
             ui.set_width(ui.available_width());
             if let Some(err) = &self.load_error {
-                ui.label(RichText::new(err).monospace().size(12.5).color(theme::DANGER));
+                ui.label(
+                    RichText::new(err)
+                        .monospace()
+                        .size(12.5)
+                        .color(theme::DANGER),
+                );
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -515,64 +610,77 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(theme::PANEL)
-                    .inner_margin(Margin::symmetric(18, 12))
+                    .inner_margin(Margin::symmetric(24, 14))
                     .stroke(Stroke::new(1.0, theme::BORDER)),
             )
             .show(root, |ui| {
                 ui.horizontal(|ui| {
-                    widgets::icon_tile(ui, icons::BRAND, 30.0, 18.0, theme::ACCENT);
-                    ui.add_space(6.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.label(RichText::new("Codex 配置助手").size(15.5).strong().color(theme::TEXT));
-                        if let Some(doc) = &self.doc {
-                            ui.label(
-                                RichText::new(doc.config_path.display().to_string())
-                                    .size(11.0)
-                                    .color(theme::TEXT_MUTED),
-                            );
-                        }
-                    });
-                    ui.add_space(14.0);
-
-                    if let Some(doc) = &self.doc {
-                        let dirty = doc.dirty();
-                        if dirty {
-                            widgets::badge(ui, &format!("{} 有未保存的修改", icons::DOT), theme::WARN, theme::WARN_WEAK);
-                        } else {
-                            widgets::badge(ui, &format!("{} 已保存", icons::CHECK), theme::OK, theme::OK_WEAK);
-                        }
-                        let issues = self.issues();
-                        let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
-                        let warnings = issues.iter().filter(|i| i.severity == Severity::Warning).count();
-                        if errors > 0 {
-                            widgets::badge(ui, &format!("{} {errors} 个错误", icons::ERROR), theme::DANGER, theme::DANGER_WEAK);
-                        }
-                        if warnings > 0 {
-                            widgets::badge(ui, &format!("{} {warnings} 个警告", icons::WARNING), theme::WARN, theme::WARN_WEAK);
-                        }
-                        if errors == 0 && warnings == 0 {
-                            widgets::badge(ui, &format!("{} 配置检查通过", icons::CHECK), theme::OK, theme::OK_WEAK);
-                        }
-                    }
-
+                    ui.label(
+                        RichText::new("我的工作空间")
+                            .size(12.5)
+                            .color(theme::TEXT_MUTED),
+                    );
+                    ui.label(RichText::new("/").color(theme::BORDER_STRONG));
+                    ui.label(RichText::new("本地配置").size(12.5).color(theme::TEXT));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let dirty = self.doc.as_ref().is_some_and(|doc| doc.dirty());
+                        let dirty = self.has_unsaved_changes();
                         ui.add_enabled_ui(dirty, |ui| {
-                            if widgets::primary_button(ui, &format!("{} 保存 · Cmd+S", icons::SAVE)).clicked() {
+                            let shortcut = if cfg!(target_os = "macos") {
+                                "⌘ S"
+                            } else {
+                                "Ctrl+S"
+                            };
+                            if widgets::primary_button(ui, "保存配置")
+                                .on_hover_text(format!("写入前自动备份 · {shortcut}"))
+                                .clicked()
+                            {
                                 self.save();
                             }
-                        });
-                        ui.add_enabled_ui(dirty, |ui| {
-                            if widgets::ghost_button(ui, &format!("{} 放弃修改", icons::REVERT)).clicked() {
-                                self.discard();
+                            if widgets::ghost_button(ui, "预览修改").clicked() {
+                                self.show_diff = true;
+                            }
+                            if widgets::link_button(ui, "撤销修改", theme::TEXT_DIM).clicked() {
+                                self.request_discard();
                             }
                         });
-                        if widgets::ghost_button(ui, &format!("{} 对比差异", icons::DIFF)).clicked() {
-                            self.show_diff = true;
-                        }
-                        if widgets::ghost_button(ui, &format!("{} 重启生效", icons::RESTART)).clicked() {
+                    });
+                });
+            });
+    }
+
+    fn status_bar(&mut self, root: &mut Ui) {
+        egui::Panel::bottom("status_bar")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL)
+                    .inner_margin(Margin::symmetric(24, 10))
+                    .stroke(Stroke::new(1.0, theme::BORDER)),
+            )
+            .show(root, |ui| {
+                ui.horizontal(|ui| {
+                    let (text, color) = if self.doc.is_none() {
+                        ("配置尚未载入", theme::DANGER)
+                    } else if self.has_raw_draft() {
+                        ("源文件草稿尚未应用", theme::WARN)
+                    } else if self.has_unsaved_changes() {
+                        ("有未保存的修改", theme::WARN)
+                    } else if self.saved_needs_restart {
+                        ("已保存 · 重启 Codex 后使用新配置", theme::OK)
+                    } else {
+                        ("已与本地文件同步", theme::TEXT_DIM)
+                    };
+                    ui.label(RichText::new(icons::SHIELD).size(16.0).color(color));
+                    ui.label(RichText::new(text).size(12.0).color(color));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if widgets::link_button(ui, "重启服务…", theme::ACCENT).clicked() {
                             self.open_restart_dialog();
+                        }
+                        if ui.available_width() > 160.0 {
+                            ui.label(
+                                RichText::new("保存前自动备份")
+                                    .size(11.5)
+                                    .color(theme::TEXT_MUTED),
+                            );
                         }
                     });
                 });
@@ -581,58 +689,76 @@ impl App {
 
     fn sidebar(&mut self, root: &mut Ui) {
         egui::Panel::left("sidebar")
-            .exact_size(224.0)
+            .exact_size(208.0)
             .resizable(false)
             .frame(
                 egui::Frame::new()
                     .fill(theme::PANEL)
-                    .inner_margin(Margin::symmetric(12, 14))
+                    .inner_margin(Margin::symmetric(16, 24))
                     .stroke(Stroke::new(1.0, theme::BORDER)),
             )
             .show(root, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.horizontal(|ui| {
+                    widgets::icon_tile(ui, icons::BRAND, 36.0, 24.0, theme::ACCENT);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(
+                            RichText::new("Codex")
+                                .size(23.0)
+                                .strong()
+                                .color(theme::TEXT),
+                        );
+                        ui.label(RichText::new("配置助手").size(12.0).color(theme::TEXT_DIM));
+                    });
+                });
+                ui.add_space(24.0);
                 ui.label(
-                    RichText::new("导航")
-                        .size(10.5)
-                        .strong()
+                    RichText::new("日常使用")
+                        .size(11.0)
                         .color(theme::TEXT_MUTED),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 let counts = self.sidebar_counts();
                 for page in Page::ALL {
+                    if page == Page::Profiles {
+                        ui.add_space(16.0);
+                        ui.label(
+                            RichText::new("进阶工具")
+                                .size(11.0)
+                                .color(theme::TEXT_MUTED),
+                        );
+                        ui.add_space(8.0);
+                    }
                     let selected = self.page == page;
                     if self.nav_item(ui, page, selected, counts.get(&page).copied().flatten()) {
                         self.page = page;
                     }
-                    ui.add_space(3.0);
+                    ui.add_space(2.0);
                 }
 
                 ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
-                    ui.add_space(8.0);
-                    if widgets::ghost_button(ui, &format!("{} 关于 / 帮助", icons::INFO)).clicked() {
+                    ui.label(
+                        RichText::new("桌面版  /  v0.1.0")
+                            .size(10.5)
+                            .color(theme::TEXT_MUTED),
+                    );
+                    ui.add_space(12.0);
+                    if widgets::link_button(ui, "使用帮助", theme::TEXT_DIM).clicked() {
                         self.show_about = true;
                     }
                     ui.add_space(4.0);
                     if let Some(doc) = &self.doc {
                         let home = doc.codex_home.clone();
-                        if widgets::ghost_button(ui, &format!("{} 打开配置文件夹", icons::OPEN_FOLDER)).clicked() {
-                            let _ = open::that(&home);
+                        if widgets::link_button(ui, "打开配置文件夹", theme::TEXT_DIM)
+                            .on_hover_text(home.display().to_string())
+                            .clicked()
+                        {
+                            self.open_in_editor(home);
                         }
                     }
                     ui.add_space(10.0);
                     ui.separator();
-                    if let Some(doc) = &self.doc {
-                        ui.label(
-                            RichText::new("CODEX_HOME")
-                                .size(10.5)
-                                .color(theme::TEXT_MUTED),
-                        );
-                        ui.label(
-                            RichText::new(doc.codex_home.display().to_string())
-                                .size(10.5)
-                                .monospace()
-                                .color(theme::TEXT_MUTED),
-                        );
-                    }
                 });
             });
     }
@@ -640,52 +766,38 @@ impl App {
     /// One navigation row: an accent bar on the left when selected, an icon,
     /// the page name and an optional count badge. Returns true when clicked.
     fn nav_item(&self, ui: &mut Ui, page: Page, selected: bool, count: Option<usize>) -> bool {
-        let fill = if selected { theme::ACCENT_WEAK } else { Color32::TRANSPARENT };
-        let stroke = if selected {
-            Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.55))
+        let color = if selected {
+            theme::ACCENT
         } else {
-            Stroke::NONE
+            theme::TEXT_DIM
         };
-        let frame = egui::Frame::new()
-            .fill(fill)
-            .stroke(stroke)
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(Margin::symmetric(10, 8));
-        let response = frame
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let icon_color = if selected { theme::ACCENT_HI } else { theme::TEXT_MUTED };
-                    ui.label(RichText::new(page.icon()).size(17.0).color(icon_color));
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(page.title())
-                            .size(13.5)
-                            .strong()
-                            .color(if selected { theme::ACCENT_TEXT } else { theme::TEXT_DIM }),
-                    );
-                    if let Some(count) = count {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let (fg, bg) = if selected {
-                                (theme::ACCENT_TEXT, theme::ACCENT.gamma_multiply(0.22))
-                            } else {
-                                (theme::TEXT_MUTED, theme::CARD_ALT)
-                            };
-                            widgets::count_pill(ui, count, fg, bg);
-                        });
-                    }
-                });
-            })
-            .response
-            .interact(egui::Sense::click());
-        // Accent indicator bar on the very left edge when selected.
-        if selected {
-            let rect = response.rect;
-            let bar = egui::Rect::from_min_max(
-                rect.left_top() + egui::vec2(-2.0, 6.0),
-                rect.left_bottom() + egui::vec2(1.0, -6.0),
+        let response = ui.add_sized(
+            [ui.available_width(), 40.0],
+            egui::Button::new(RichText::new(page.title()).size(13.5).color(color))
+                .fill(if selected {
+                    theme::ACCENT_WEAK
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .stroke(Stroke::NONE)
+                .corner_radius(CornerRadius::same(10))
+                .selected(selected),
+        );
+        ui.painter().text(
+            egui::pos2(response.rect.left() + 18.0, response.rect.center().y),
+            egui::Align2::CENTER_CENTER,
+            page.icon(),
+            egui::FontId::proportional(18.0),
+            color,
+        );
+        if let Some(count) = count {
+            ui.painter().text(
+                egui::pos2(response.rect.right() - 14.0, response.rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                count.to_string(),
+                egui::FontId::proportional(11.0),
+                theme::TEXT_MUTED,
             );
-            ui.painter().rect_filled(bar, CornerRadius::same(2), theme::ACCENT);
         }
         response.clicked()
     }
@@ -719,6 +831,7 @@ impl App {
             .unwrap_or_else(|| "(未设置模型目录)".to_string());
 
         let mut open = self.show_diff;
+        let mut close_requested = false;
         egui::Window::new("保存前对比差异")
             .open(&mut open)
             .collapsible(false)
@@ -729,33 +842,43 @@ impl App {
                     widgets::note(ui, "目前没有未保存的修改。", theme::TEXT_DIM);
                     return;
                 }
-                ui.label(RichText::new("左边红色是磁盘上的旧内容，右边绿色是即将写入的新内容。")
-                    .size(12.0)
-                    .color(theme::TEXT_DIM));
+                ui.label(
+                    RichText::new("红色减号是原有内容，绿色加号是修改后的内容。")
+                        .size(12.0)
+                        .color(theme::TEXT_DIM),
+                );
                 ui.add_space(6.0);
                 if config_dirty {
-                    ui.label(RichText::new(format!("config.toml · {config_path}"))
-                        .size(13.0).strong().color(theme::TEXT));
+                    ui.label(
+                        RichText::new(format!("config.toml · {config_path}"))
+                            .size(13.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
                     diff_view(ui, "diff-config", &config_old, &config_new);
                 }
                 if catalog_dirty {
                     ui.add_space(10.0);
-                    ui.label(RichText::new(format!("模型目录 · {catalog_path}"))
-                        .size(13.0).strong().color(theme::TEXT));
+                    ui.label(
+                        RichText::new(format!("模型目录 · {catalog_path}"))
+                            .size(13.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
                     diff_view(ui, "diff-catalog", &catalog_old, &catalog_new);
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if widgets::primary_button(ui, "确认并保存").clicked() {
-                        self.show_diff = false;
+                        close_requested = true;
                         self.save();
                     }
                     if widgets::ghost_button(ui, "关闭").clicked() {
-                        self.show_diff = false;
+                        close_requested = true;
                     }
                 });
             });
-        self.show_diff = open;
+        self.show_diff = open && !close_requested;
     }
 
     fn about_window(&mut self, ctx: &Context) {
@@ -763,6 +886,7 @@ impl App {
             return;
         }
         let mut open = self.show_about;
+        let mut close_requested = false;
         let font_note = self.font_note.clone();
         egui::Window::new("关于 Codex 配置助手")
             .open(&mut open)
@@ -780,8 +904,8 @@ impl App {
                     for tip in [
                         "1. 先去「服务商」页添加一个模型服务商（有现成模板，点一下就填好）。",
                         "2. 再去「模型管理」页添加模型，并给每个模型选好服务商。",
-                        "3. 回到「基础设置」页，把「当前模型」和「当前服务商」设成刚才那两个。",
-                        "4. 点右上角「保存」。保存前会自动备份原文件，出问题可以随时还原。",
+                        "3. 回到「开始使用」页，选择当前模型和服务商；不确定的选项保持默认。",
+                        "4. 点右上角「保存配置」。保存前会自动备份；重启 Codex 后使用新配置。",
                     ] {
                         ui.label(RichText::new(tip).size(12.5).color(theme::TEXT_DIM));
                         ui.add_space(2.0);
@@ -793,10 +917,10 @@ impl App {
                 widgets::kv_row(ui, "模型目录", "model_catalog_json 指向的 JSON 文件");
                 ui.add_space(6.0);
                 if widgets::ghost_button(ui, "关闭").clicked() {
-                    self.show_about = false;
+                    close_requested = true;
                 }
             });
-        self.show_about = open;
+        self.show_about = open && !close_requested;
     }
 }
 
@@ -817,11 +941,12 @@ fn diff_view(ui: &mut Ui, id: &str, old: &str, new: &str) {
                         ChangeTag::Insert => (theme::OK, "+ "),
                     };
                     let text = change.value().trim_end_matches('\n');
-                    if change.tag() != ChangeTag::Equal {
-                        ui.label(RichText::new(format!("{prefix}{text}")).monospace().size(11.5).color(color));
-                    } else {
-                        ui.label(RichText::new(format!("{prefix}{text}")).monospace().size(11.5).color(color));
-                    }
+                    ui.label(
+                        RichText::new(format!("{prefix}{text}"))
+                            .monospace()
+                            .size(11.5)
+                            .color(color),
+                    );
                 }
             });
         });

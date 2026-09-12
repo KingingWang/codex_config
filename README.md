@@ -24,6 +24,7 @@
 
 ## 功能
 
+- **新手首页**：暖白与鼠尾草绿的清爽界面，先选模型、服务商和思考深度；权限可一键选择「先看看，不改文件」或「在项目里帮我工作」。回答偏好、文件目录等选项按需展开，专业字段名可悬停查看。
 - **基础设置**：当前模型 / 当前服务商 / 推理强度 / 思考摘要 / 详细程度 / 人格 / 配置档，
   沙箱模式与审批策略，`model_catalog_json` 的指向管理，以及常用输出开关。
 - **模型管理**：对模型目录 JSON 做增删改查。列表带搜索、服务商徽章、上下文大小、推理档位；
@@ -45,6 +46,7 @@
 - **保存前差异对比**：红绿 diff 展示磁盘旧内容与即将写入的新内容。
 - **安全**：只在点「保存」时写盘；写入前自动备份（`config.toml.bak-时间戳`，最多保留 20 份）；
   原子写入（临时文件 + rename）；用 `toml_edit` 做无损编辑，**你的注释和排版都会保留**。
+- **防误操作**：撤销修改、关闭未保存的窗口时确认；源文件草稿须先应用再保存；新建模型目录也等到保存才写入磁盘。已保存与需要重启的状态分开提示。
 - **健康检查**：模型不在目录里、服务商不存在、地址格式不对、推理档位不匹配等问题
   会在顶栏和「基础设置」里用错误/警告标出，点一下可以跳到对应页面。
 
@@ -57,6 +59,22 @@ cargo run --release          # 开发/运行
 cargo build --release        # 产物在 target/release/codex-config
 cargo test                   # GUI 测试：离屏渲染每一页并模拟交互
 ```
+
+界面测试使用临时配置目录，不访问真实服务商，也不会修改个人配置。
+运行 `cargo test -- --test-threads=1` 会生成 `screenshots/` 下的整页、1000×660 小窗口及操作截图。
+覆盖导航、键盘保存、权限预设、折叠设置、配置档覆盖、保存备份、撤销/退出保护、
+目录创建、源文件应用、错误配置与删除取消。个人配置冒烟测试默认忽略，需显式启用。
+
+Linux 下也可以实际启动桌面窗口并截图（本机需有 Xvfb、xwininfo、Python Pillow）：
+
+```bash
+cargo build --bin codex-config
+xvfb-run -a -s "-screen 0 1440x960x24" \
+  python3 tools/smoke_desktop.py --binary target/debug/codex-config
+```
+
+若设置了 `CARGO_TARGET_DIR`，请将 `--binary` 替换为实际产物路径。
+截图写入 `screenshots/native-desktop.png`；脚本只启动测试配置实例，并在结束后关闭该实例。
 
 启动后默认读取 `$CODEX_HOME`（未设置时为 `~/.codex`）。
 也可以在侧栏底部或「基础设置」里切换到别的配置目录。
@@ -118,7 +136,7 @@ tests/gui.rs         egui_kittest GUI 测试（离屏渲染 + 模拟点击/输�
 
 ## 设计说明
 
-- **为什么是 egui**：纯 Rust、无 WebView 依赖、单二进制；配合自定义深色主题和
+- **为什么是 egui**：纯 Rust、无 WebView 依赖、单二进制；配合自定义浅色主题和
   自动加载的系统中文字体（PingFang / Hiragino Sans GB / 微软雅黑 / Noto CJK），
   在 macOS / Linux / Windows 上都能得到一致的观感。
 - **为什么不直接 serde 反序列化整个 config.toml**：Codex 的配置字段非常多且版本变化快，

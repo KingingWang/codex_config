@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use crate::doc::catalog;
 use crate::doc::providers;
 use crate::doc::toml_ext::TomlPathExt;
-use crate::doc::{Document, BUILTIN_PROVIDER_IDS};
+use crate::doc::{BUILTIN_PROVIDER_IDS, Document};
 use crate::page::Page;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -35,13 +35,28 @@ pub struct Issue {
 
 impl Issue {
     fn error(page: Page, title: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { severity: Severity::Error, page, title: title.into(), detail: detail.into() }
+        Self {
+            severity: Severity::Error,
+            page,
+            title: title.into(),
+            detail: detail.into(),
+        }
     }
     fn warn(page: Page, title: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { severity: Severity::Warning, page, title: title.into(), detail: detail.into() }
+        Self {
+            severity: Severity::Warning,
+            page,
+            title: title.into(),
+            detail: detail.into(),
+        }
     }
     fn info(page: Page, title: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { severity: Severity::Info, page, title: title.into(), detail: detail.into() }
+        Self {
+            severity: Severity::Info,
+            page,
+            title: title.into(),
+            detail: detail.into(),
+        }
     }
 }
 
@@ -53,17 +68,10 @@ pub fn validate(doc: &Document) -> Vec<Issue> {
         .collect();
 
     let provider_ids: BTreeSet<String> = doc.provider_ids().into_iter().collect();
-    let known_providers = |id: &str| provider_ids.contains(id) || BUILTIN_PROVIDER_IDS.contains(&id);
+    let known_providers =
+        |id: &str| provider_ids.contains(id) || BUILTIN_PROVIDER_IDS.contains(&id);
 
     // --- providers ---------------------------------------------------------
-    if provider_ids.is_empty() {
-        issues.push(Issue::warn(
-            Page::Providers,
-            "还没有配置任何服务商",
-            "Codex 需要知道从哪里取模型。去「服务商」页选一个模板（比如 OpenAI 官方或本地 Ollama）一键添加。",
-        ));
-    }
-
     for provider in providers::all(&doc.config) {
         if provider.base_url.is_empty() && !BUILTIN_PROVIDER_IDS.contains(&provider.id.as_str()) {
             issues.push(Issue::error(
@@ -150,7 +158,7 @@ pub fn validate(doc: &Document) -> Vec<Issue> {
             "当前选中的服务商不存在",
             format!(
                 "config.toml 里 model_provider = \"{active_provider}\"，但 [model_providers.{active_provider}] 没有定义。\
-去「服务商」页添加它，或者在「基础设置」里换一个。"
+去「服务商」页添加它，或者在「开始使用」里换一个。"
             ),
         ));
     }

@@ -79,6 +79,12 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
         return;
     }
     let provider_options = app.provider_options();
+    if app.editing_model.is_none() {
+        if let Some(row) = rows.iter().find(|row| row.active).or(rows.first()) {
+            app.select_model(row.index);
+        }
+    }
+    let list_width = (ui.available_width() * 0.27).clamp(224.0, 280.0);
     let height = (ui.available_height() - 20.0).max(200.0);
     let mut action = ModelAction::None;
 
@@ -104,12 +110,20 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
         {
             let busy = app.probe.is_some();
             ui.add_enabled_ui(!busy, |ui| {
-                let label = if busy { "正在拉取…".to_string() } else { format!("{} 从服务商拉取模型列表", icons::DOWNLOAD) };
+                let label = if busy {
+                    "正在拉取…".to_string()
+                } else {
+                    format!("{} 从服务商拉取模型列表", icons::DOWNLOAD)
+                };
                 if widgets::ghost_button(ui, &label).clicked() {
                     app.start_probe(&provider, Probe::ListModels, None, ctx);
                 }
             });
-            ui.label(RichText::new(format!("当前服务商：{provider}")).size(11.5).color(theme::TEXT_MUTED));
+            ui.label(
+                RichText::new(format!("当前服务商：{provider}"))
+                    .size(11.5)
+                    .color(theme::TEXT_MUTED),
+            );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
@@ -130,7 +144,7 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
     ui.horizontal_top(|ui| {
         // ---- list column ------------------------------------------------
         ui.vertical(|ui| {
-            ui.set_width(304.0);
+            ui.set_width(list_width);
             let mut local_query = query.clone();
             if widgets::search_field(ui, &mut local_query) {
                 app.model_query = local_query.clone();
@@ -161,19 +175,20 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                             let mut set_active = false;
                             ui.horizontal(|ui| {
                                 ui.vertical(|ui| {
+                                    ui.set_width((list_width - 118.0).max(100.0));
                                     ui.spacing_mut().item_spacing.y = 2.0;
-                                    ui.label(
+                                    ui.add(egui::Label::new(
                                         RichText::new(row.display.clone())
                                             .size(13.0)
                                             .strong()
                                             .color(theme::TEXT),
-                                    );
-                                    ui.label(
+                                    ).truncate()).on_hover_text(&row.display);
+                                    ui.add(egui::Label::new(
                                         RichText::new(row.slug.clone())
                                             .monospace()
                                             .size(11.0)
                                             .color(theme::TEXT_MUTED),
-                                    );
+                                    ).truncate()).on_hover_text(&row.slug);
                                 });
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::TOP),
@@ -270,9 +285,13 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                     .and_then(Value::as_str)
                     .map(str::to_string);
                 if let Some(provider) = provider.filter(|p| !p.is_empty()) {
-                    doc.config
-                        .set_value_at(&["model_provider"], toml_edit::Value::from(provider.clone()));
-                    app.toast_info(format!("已把 {slug} 设为当前模型，服务商也切到了 {provider}"));
+                    doc.config.set_value_at(
+                        &["model_provider"],
+                        toml_edit::Value::from(provider.clone()),
+                    );
+                    app.toast_info(format!(
+                        "已把 {slug} 设为当前模型，服务商也切到了 {provider}"
+                    ));
                 } else {
                     app.toast_info(format!("已把 {slug} 设为当前模型"));
                 }
@@ -280,7 +299,10 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
         }
         ModelAction::Duplicate(index) => duplicate_model(app, index),
         ModelAction::RenameSlug(index, slug) => {
-            app.dialog = Some(Dialog::RenameModel { index, buffer: slug });
+            app.dialog = Some(Dialog::RenameModel {
+                index,
+                buffer: slug,
+            });
         }
         ModelAction::Delete(index, slug) => {
             app.dialog = Some(Dialog::DeleteModel { index, slug });
@@ -300,7 +322,9 @@ fn no_catalog(app: &mut App, ui: &mut Ui, path: Option<String>) {
         if let Some(path) = path {
             widgets::note(
                 ui,
-                &format!("config.toml 里写的是 {path}，但这个文件读不出来（不存在或不是合法 JSON）。"),
+                &format!(
+                    "config.toml 里写的是 {path}，但这个文件读不出来（不存在或不是合法 JSON）。"
+                ),
                 theme::WARN,
             );
             ui.add_space(8.0);
@@ -345,7 +369,7 @@ fn editor(
     let mut changed = false;
 
     // header
-    ui.horizontal(|ui| {
+    ui.vertical(|ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(
@@ -365,22 +389,35 @@ fn editor(
                     .color(theme::TEXT_MUTED),
             );
         });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if widgets::danger_button(ui, &format!("{} 删除模型", icons::DELETE)).clicked() {
-                *action = ModelAction::Delete(row.index, row.slug.clone());
-            }
-            if widgets::ghost_button(ui, &format!("{} 复制为新模型", icons::DUPLICATE)).clicked() {
-                *action = ModelAction::Duplicate(row.index);
-            }
-            if widgets::ghost_button(ui, &format!("{} 改 slug", icons::RENAME)).clicked() {
-                *action = ModelAction::RenameSlug(row.index, editor.slug.clone());
-            }
+        ui.horizontal_wrapped(|ui| {
             if !row.active && widgets::primary_button(ui, "设为当前模型").clicked() {
                 *action = ModelAction::SetActive(row.slug.clone());
             }
             if row.active {
-                widgets::badge(ui, &format!("{} 当前使用中", icons::CHECK), theme::OK, theme::OK_WEAK);
+                widgets::badge(
+                    ui,
+                    &format!("{} 当前使用中", icons::CHECK),
+                    theme::OK,
+                    theme::OK_WEAK,
+                );
             }
+            ui.menu_button("更多操作", |ui| {
+                if widgets::danger_button(ui, &format!("{} 删除模型", icons::DELETE)).clicked()
+                {
+                    *action = ModelAction::Delete(row.index, row.slug.clone());
+                    ui.close();
+                }
+                if widgets::ghost_button(ui, &format!("{} 复制为新模型", icons::DUPLICATE))
+                    .clicked()
+                {
+                    *action = ModelAction::Duplicate(row.index);
+                    ui.close();
+                }
+                if widgets::ghost_button(ui, &format!("{} 改 slug", icons::RENAME)).clicked() {
+                    *action = ModelAction::RenameSlug(row.index, editor.slug.clone());
+                    ui.close();
+                }
+            });
         });
     });
     ui.add_space(10.0);
@@ -391,66 +428,127 @@ fn editor(
         ui.add_space(8.0);
     }
 
-    widgets::section(ui, icons::BASICS, "基本信息", "模型叫什么、走哪个服务商、在列表里怎么显示", |ui| {
-        if widgets::field(
-            ui,
-            FieldSpec::new("模型标识", "slug", "Codex 和服务商都用这个名字来识别模型，必须完全一致。改这里等于改模型的身份。"),
-            |ui| widgets::mono_field(ui, "m-slug", &mut editor.slug, "gpt-5.2-codex"),
-        ) {
-            changed = true;
-        }
-        if widgets::field(
-            ui,
-            FieldSpec::new("显示名称", "display_name", "在 Codex 的 /model 列表里显示的名字，可以写中文，随便改。"),
-            |ui| widgets::text_field(ui, "m-display", &mut editor.display_name, "例如：Claude Opus 5"),
-        ) {
-            changed = true;
-        }
-        if widgets::field(
-            ui,
-            FieldSpec::new("描述", "description", "一句话说明这个模型适合干什么，只显示给你自己看。"),
-            |ui| widgets::text_field(ui, "m-desc", &mut editor.description, "例如：适合复杂重构"),
-        ) {
-            changed = true;
-        }
-        if widgets::field(
-            ui,
-            FieldSpec::new("使用哪个服务商", "provider", "选中这个模型时，Codex 会自动切到这里的请求地址。留空则沿用「基础设置」里的当前服务商。"),
-            |ui| {
-                let mut provider = editor.provider.clone();
-                let mut options = vec![(String::new(), "（沿用当前服务商）".to_string())];
-                options.extend(provider_options.iter().cloned());
-                let row_changed = widgets::string_dropdown(ui, "m-provider", &mut provider, &options, "（沿用当前服务商）");
-                editor.provider = provider;
-                row_changed
-            },
-        ) {
-            changed = true;
-        }
-        if !editor.provider.is_empty() && !provider_options.iter().any(|(value, _)| *value == editor.provider) {
-            widgets::note(
+    widgets::section(
+        ui,
+        icons::BASICS,
+        "基本信息",
+        "模型叫什么、走哪个服务商、在列表里怎么显示",
+        |ui| {
+            if widgets::field(
                 ui,
-                &format!("服务商「{}」在 config.toml 里还不存在，请去「服务商」页添加它。", editor.provider),
-                theme::DANGER,
-            );
-        }
-        if widgets::field(
-            ui,
-            FieldSpec::new("是否显示", "visibility", "控制这个模型在 /model 列表里能不能被看到、能不能用。"),
-            |ui| widgets::choice_dropdown(ui, "m-visibility", &mut editor.visibility, MODEL_VISIBILITY, false),
-        ) {
-            changed = true;
-        }
-        if widgets::field(
-            ui,
-            FieldSpec::new("排序优先级", "priority", "数字越小越靠前，只影响 /model 列表里的顺序。"),
-            |ui| widgets::opt_int_field(ui, "m-priority", &mut editor.priority),
-        ) {
-            changed = true;
-        }
-    });
+                FieldSpec::new(
+                    "模型标识",
+                    "slug",
+                    "Codex 和服务商都用这个名字来识别模型，必须完全一致。改这里等于改模型的身份。",
+                ),
+                |ui| widgets::mono_field(ui, "m-slug", &mut editor.slug, "gpt-5.2-codex"),
+            ) {
+                changed = true;
+            }
+            if widgets::field(
+                ui,
+                FieldSpec::new(
+                    "显示名称",
+                    "display_name",
+                    "在 Codex 的 /model 列表里显示的名字，可以写中文，随便改。",
+                ),
+                |ui| {
+                    widgets::text_field(
+                        ui,
+                        "m-display",
+                        &mut editor.display_name,
+                        "例如：Claude Opus 5",
+                    )
+                },
+            ) {
+                changed = true;
+            }
+            if widgets::field(
+                ui,
+                FieldSpec::new(
+                    "描述",
+                    "description",
+                    "一句话说明这个模型适合干什么，只显示给你自己看。",
+                ),
+                |ui| {
+                    widgets::text_field(ui, "m-desc", &mut editor.description, "例如：适合复杂重构")
+                },
+            ) {
+                changed = true;
+            }
+            if widgets::field(
+                ui,
+                FieldSpec::new(
+                    "使用哪个服务商",
+                    "provider",
+                    "选中这个模型时，Codex 会自动切到这里的请求地址。留空则沿用「基础设置」里的当前服务商。",
+                ),
+                |ui| {
+                    let mut provider = editor.provider.clone();
+                    let mut options = vec![(String::new(), "（沿用当前服务商）".to_string())];
+                    options.extend(provider_options.iter().cloned());
+                    let row_changed = widgets::string_dropdown(
+                        ui,
+                        "m-provider",
+                        &mut provider,
+                        &options,
+                        "（沿用当前服务商）",
+                    );
+                    editor.provider = provider;
+                    row_changed
+                },
+            ) {
+                changed = true;
+            }
+            if !editor.provider.is_empty()
+                && !provider_options
+                    .iter()
+                    .any(|(value, _)| *value == editor.provider)
+            {
+                widgets::note(
+                    ui,
+                    &format!(
+                        "服务商「{}」在 config.toml 里还不存在，请去「服务商」页添加它。",
+                        editor.provider
+                    ),
+                    theme::DANGER,
+                );
+            }
+            if widgets::field(
+                ui,
+                FieldSpec::new(
+                    "是否显示",
+                    "visibility",
+                    "控制这个模型在 /model 列表里能不能被看到、能不能用。",
+                ),
+                |ui| {
+                    widgets::choice_dropdown(
+                        ui,
+                        "m-visibility",
+                        &mut editor.visibility,
+                        MODEL_VISIBILITY,
+                        false,
+                    )
+                },
+            ) {
+                changed = true;
+            }
+            if widgets::field(
+                ui,
+                FieldSpec::new(
+                    "排序优先级",
+                    "priority",
+                    "数字越小越靠前，只影响 /model 列表里的顺序。",
+                ),
+                |ui| widgets::opt_int_field(ui, "m-priority", &mut editor.priority),
+            ) {
+                changed = true;
+            }
+        },
+    );
     ui.add_space(6.0);
 
+    egui::CollapsingHeader::new("推理与思考").id_salt(("model-reasoning", row.index)).show(ui, |ui| {
     widgets::section(ui, icons::REASONING, "推理与思考", "模型能想多深，界面上显示多少思考内容", |ui| {
         if widgets::field(
             ui,
@@ -526,6 +624,8 @@ fn editor(
     });
     ui.add_space(6.0);
 
+    });
+    egui::CollapsingHeader::new("上下文与截断").id_salt(("model-context", row.index)).show(ui, |ui| {
     widgets::section(ui, icons::CONTEXT, "上下文与截断", "一次能记住多少内容，命令输出太长时怎么截断", |ui| {
         if widgets::field(
             ui,
@@ -565,6 +665,8 @@ fn editor(
     });
     ui.add_space(6.0);
 
+    });
+    egui::CollapsingHeader::new("能力与工具").id_salt(("model-capabilities", row.index)).show(ui, |ui| {
     widgets::section(ui, icons::CAPABILITIES, "能力与工具", "这个模型能用哪些工具、支持哪些输入", |ui| {
         if widgets::field(
             ui,
@@ -645,54 +747,92 @@ fn editor(
     });
     ui.add_space(6.0);
 
+    });
     // advanced (collapsed by default)
     let open = ui
         .horizontal(|ui| {
-            let text = if editor.open_advanced { icons::CARET_DOWN } else { icons::CARET_RIGHT };
+            let text = if editor.open_advanced {
+                icons::CARET_DOWN
+            } else {
+                icons::CARET_RIGHT
+            };
             widgets::ghost_button(ui, &format!("{text} 高级字段（一般不用动）")).clicked()
         })
         .inner;
     if open {
         editor.open_advanced = !editor.open_advanced;
-        changed = true;
+        app.model_editor.open_advanced = editor.open_advanced;
     }
     if editor.open_advanced {
-        widgets::section(ui, icons::GEAR, "高级字段", "这些字段通常保持默认就好，除非你明确知道要改", |ui| {
-            if widgets::field(
-                ui,
-                FieldSpec::new("压缩兼容标识", "comp_hash", "内部用来判断压缩行为是否兼容的标记，一般不用改。"),
-                |ui| widgets::mono_field(ui, "m-comphash", &mut editor.comp_hash, "留空即可"),
-            ) {
-                changed = true;
-            }
-            if widgets::field(
-                ui,
-                FieldSpec::new("代码审查用的模型", "auto_review_model_override", "自动代码审查时改用哪个模型。留空表示用当前模型。"),
-                |ui| widgets::mono_field(ui, "m-review", &mut editor.auto_review_model_override, "留空即可"),
-            ) {
-                changed = true;
-            }
-            if widgets::field(
-                ui,
-                FieldSpec::new("首次可见时的提示语", "availability_nux.message", "用户第一次在列表里看到这个模型时显示的一段说明。留空则不显示。"),
-                |ui| widgets::multiline_field(ui, "m-nux", &mut editor.nux_message, 3),
-            ) {
-                changed = true;
-            }
-            if widgets::field(
-                ui,
-                FieldSpec::new("自定义系统提示词", "base_instructions", "覆盖这个模型的默认系统提示词。绝大多数情况请留空，乱改会让 Codex 行为异常。"),
-                |ui| widgets::multiline_field(ui, "m-instr", &mut editor.base_instructions, 4),
-            ) {
-                changed = true;
-            }
-        });
+        widgets::section(
+            ui,
+            icons::GEAR,
+            "高级字段",
+            "这些字段通常保持默认就好，除非你明确知道要改",
+            |ui| {
+                if widgets::field(
+                    ui,
+                    FieldSpec::new(
+                        "压缩兼容标识",
+                        "comp_hash",
+                        "内部用来判断压缩行为是否兼容的标记，一般不用改。",
+                    ),
+                    |ui| widgets::mono_field(ui, "m-comphash", &mut editor.comp_hash, "留空即可"),
+                ) {
+                    changed = true;
+                }
+                if widgets::field(
+                    ui,
+                    FieldSpec::new(
+                        "代码审查用的模型",
+                        "auto_review_model_override",
+                        "自动代码审查时改用哪个模型。留空表示用当前模型。",
+                    ),
+                    |ui| {
+                        widgets::mono_field(
+                            ui,
+                            "m-review",
+                            &mut editor.auto_review_model_override,
+                            "留空即可",
+                        )
+                    },
+                ) {
+                    changed = true;
+                }
+                if widgets::field(
+                    ui,
+                    FieldSpec::new(
+                        "首次可见时的提示语",
+                        "availability_nux.message",
+                        "用户第一次在列表里看到这个模型时显示的一段说明。留空则不显示。",
+                    ),
+                    |ui| widgets::multiline_field(ui, "m-nux", &mut editor.nux_message, 3),
+                ) {
+                    changed = true;
+                }
+                if widgets::field(
+                    ui,
+                    FieldSpec::new(
+                        "自定义系统提示词",
+                        "base_instructions",
+                        "覆盖这个模型的默认系统提示词。绝大多数情况请留空，乱改会让 Codex 行为异常。",
+                    ),
+                    |ui| widgets::multiline_field(ui, "m-instr", &mut editor.base_instructions, 4),
+                ) {
+                    changed = true;
+                }
+            },
+        );
         ui.add_space(6.0);
     }
 
     let json_open = ui
         .horizontal(|ui| {
-            let text = if editor.open_json { icons::CARET_DOWN } else { icons::CARET_RIGHT };
+            let text = if editor.open_json {
+                icons::CARET_DOWN
+            } else {
+                icons::CARET_RIGHT
+            };
             widgets::ghost_button(ui, &format!("{text} 查看这个模型的原始 JSON")).clicked()
         })
         .inner;
@@ -712,7 +852,12 @@ fn editor(
         widgets::card(ui, |ui| {
             ui.set_width(ui.available_width());
             egui::ScrollArea::horizontal().show(ui, |ui| {
-                ui.label(RichText::new(raw).monospace().size(11.5).color(theme::TEXT_DIM));
+                ui.label(
+                    RichText::new(raw)
+                        .monospace()
+                        .size(11.5)
+                        .color(theme::TEXT_DIM),
+                );
             });
         });
     }

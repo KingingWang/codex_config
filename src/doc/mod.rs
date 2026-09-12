@@ -34,6 +34,8 @@ pub struct Document {
     pub catalog_path: Option<PathBuf>,
     pub catalog: Option<Value>,
     catalog_on_disk: String,
+    /// Canonical baseline for dirty checks; keep the original text for diff/backup.
+    catalog_clean_text: String,
     /// Non fatal problems found while loading (missing catalog, bad JSON, ...).
     pub load_notes: Vec<String>,
 }
@@ -68,7 +70,8 @@ impl Document {
             Err(err) => bail!("读取 {} 失败: {err}", config_path.display()),
         };
 
-        let config = config_text.parse::<DocumentMut>()
+        let config = config_text
+            .parse::<DocumentMut>()
             .with_context(|| format!("{} 不是合法的 TOML 文件", config_path.display()))?;
 
         let mut doc = Self {
@@ -78,6 +81,7 @@ impl Document {
             catalog_path: None,
             catalog: None,
             catalog_on_disk: String::new(),
+            catalog_clean_text: String::new(),
             load_notes,
             codex_home: codex_home.clone(),
         };
@@ -87,6 +91,7 @@ impl Document {
 
     /// Re-resolve `model_catalog_json` and (re)load the file it points at.
     pub fn reload_catalog(&mut self) {
+        self.catalog_clean_text.clear();
         let raw = self.config.str_at(&["model_catalog_json"]);
         let Some(raw) = raw.filter(|s| !s.trim().is_empty()) else {
             self.catalog_path = None;
@@ -105,6 +110,7 @@ impl Document {
                         ));
                     }
                     self.catalog_path = Some(path);
+                    self.catalog_clean_text = pretty_json(&value);
                     self.catalog = Some(value);
                     self.catalog_on_disk = text;
                 }
@@ -155,7 +161,7 @@ impl Document {
 
     pub fn catalog_dirty(&self) -> bool {
         match (&self.catalog, self.catalog_path.is_some()) {
-            (Some(_), true) => self.catalog_text() != self.catalog_on_disk,
+            (Some(_), true) => self.catalog_text() != self.catalog_clean_text,
             _ => false,
         }
     }
@@ -192,7 +198,9 @@ impl Document {
 
         // Validate first: never write something Codex cannot parse.
         let config_text = self.config.to_string();
-        config_text.parse::<DocumentMut>().context("生成的 config.toml 无法解析")?;
+        config_text
+            .parse::<DocumentMut>()
+            .context("生成的 config.toml 无法解析")?;
 
         if let Some(value) = &self.catalog {
             let _ = serde_json::to_vec(value).context("生成的模型目录 JSON 无法序列化")?;
@@ -219,6 +227,7 @@ impl Document {
                 fs::create_dir_all(parent).ok();
             }
             atomic_write(&path, &text, 0o644)?;
+            self.catalog_clean_text.clone_from(&text);
             self.catalog_on_disk = text;
             report.written.push(path);
         }
@@ -229,14 +238,34 @@ impl Document {
 
     /// Replace the whole config.toml text (used by the raw editor).
     pub fn apply_config_text(&mut self, text: &str) -> Result<()> {
-        let parsed = text.parse::<DocumentMut>().map_err(|err| anyhow::anyhow!("{err}"))?;
+        let parsed = text
+            .parse::<DocumentMut>()
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
         self.config = parsed;
         Ok(())
     }
 
     pub fn apply_catalog_text(&mut self, text: &str) -> Result<()> {
         let parsed: Value = serde_json::from_str(text).map_err(|err| anyhow::anyhow!("{err}"))?;
+        if !parsed.get("models").is_some_and(Value::is_array) {
+            bail!("模型目录需要包含 models 数组");
+        }
         self.catalog = Some(parsed);
+        Ok(())
+    }
+
+    /// Stage a new, empty catalog. No file is created until the explicit save.
+    pub fn create_catalog(&mut self, filename: &str) -> Result<()> {
+        let path = self.resolve_against_home(filename);
+        if path.exists() {
+            bail!("{} 已经存在，请换一个名字", path.display());
+        }
+        self.config
+            .set_value_at(&["model_catalog_json"], toml_edit::Value::from(filename));
+        self.catalog_path = Some(path);
+        self.catalog = Some(serde_json::json!({"models": []}));
+        self.catalog_on_disk.clear();
+        self.catalog_clean_text.clear();
         Ok(())
     }
 
@@ -291,8 +320,7 @@ pub fn expand_home(path: &Path) -> PathBuf {
 fn atomic_write(path: &Path, contents: &str, mode: u32) -> Result<()> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(parent) = parent {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("无法创建目录 {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("无法创建目录 {}", parent.display()))?;
     }
     let file_name = path
         .file_name()

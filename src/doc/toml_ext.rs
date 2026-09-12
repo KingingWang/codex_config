@@ -90,12 +90,21 @@ impl TomlPathExt for DocumentMut {
         self.set_item_at(path, Item::Value(value));
     }
 
-    fn set_item_at(&mut self, path: &[&str], item: Item) {
+    fn set_item_at(&mut self, path: &[&str], mut item: Item) {
         let Some((last, parents)) = path.split_last() else {
             return;
         };
         let table = ensure_table_chain(self.as_table_mut(), parents);
-        table.insert(last, item);
+        if let Some(existing) = table.get_mut(last) {
+            if let (Some(old), Some(new)) = (existing.as_value(), item.as_value_mut()) {
+                *new.decor_mut() = old.decor().clone();
+            }
+            // Table::insert reformats the key, discarding its leading comments.
+            // Replace only the item when the key already exists.
+            *existing = item;
+        } else {
+            table.insert(last, item);
+        }
     }
 
     fn remove_at(&mut self, path: &[&str]) -> bool {
@@ -176,7 +185,9 @@ fn ensure_table_chain<'a>(mut table: &'a mut Table, path: &[&str]) -> &'a mut Ta
             // A scalar was in the way: replace it with a table.
             *entry = Item::Table(Table::new());
         }
-        let Item::Table(inner) = entry else { unreachable!() };
+        let Item::Table(inner) = entry else {
+            unreachable!()
+        };
         if IMPLICIT_NAMESPACES.contains(key) && inner.is_empty() {
             inner.set_implicit(true);
         }
@@ -195,7 +206,11 @@ pub fn value_str(s: &str) -> Value {
 
 pub fn value_opt_str(s: &str) -> Option<Value> {
     let trimmed = s.trim();
-    if trimmed.is_empty() { None } else { Some(Value::from(trimmed.to_string())) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(Value::from(trimmed.to_string()))
+    }
 }
 
 pub fn value_int(i: i64) -> Value {
@@ -248,7 +263,10 @@ pub fn read_string_map(item: Option<&Item>) -> Vec<(String, String)> {
 }
 
 fn value_to_string(value: &Value) -> String {
-    value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string())
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 #[cfg(test)]
@@ -278,7 +296,10 @@ mod tests {
         d.set_value_at(&["model_providers", "y", "wire_api"], value_str("chat"));
         d.set_value_at(&["features", "hooks"], value_bool(true));
         let text = d.to_string();
-        assert!(text.contains("# top comment"), "comments must survive: {text}");
+        assert!(
+            text.contains("# top comment"),
+            "comments must survive: {text}"
+        );
         assert!(text.contains("[model_providers.y]"), "{text}");
         assert!(text.contains("wire_api = \"chat\""), "{text}");
         assert!(text.contains("[features]"), "{text}");
@@ -307,6 +328,9 @@ mod tests {
             Some(vec!["model".to_string(), "git-branch".to_string()])
         );
         let text = d.to_string();
-        assert!(text.contains("status_line = [\"model\", \"git-branch\"]"), "{text}");
+        assert!(
+            text.contains("status_line = [\"model\", \"git-branch\"]"),
+            "{text}"
+        );
     }
 }

@@ -1,16 +1,13 @@
 //! All modal dialogs: adding / renaming / deleting models, providers, profiles.
 
-use std::fs;
-
 use egui::{Context, RichText, Sense, Stroke};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::app::{App, Dialog};
 use crate::doc::catalog;
 use crate::doc::providers as provider_ops;
 use crate::doc::schema::{PROVIDER_TEMPLATES, ProviderTemplate};
 use crate::doc::toml_ext::{TomlPathExt, value_str};
-use crate::doc::pretty_json;
 use crate::editors::{ModelEditor, ProviderEditor};
 use crate::page::Page;
 use crate::ui::icons;
@@ -28,16 +25,27 @@ enum Act {
         provider: String,
         clone_from: String,
     },
-    RenameProvider { from: String, to: String },
+    RenameProvider {
+        from: String,
+        to: String,
+    },
     DeleteProvider(String),
     DeleteModel(usize),
     DeleteProfile(String),
-    RenameModel { index: usize, slug: String },
+    RenameModel {
+        index: usize,
+        slug: String,
+    },
     CreateCatalog(String),
-    ImportModels { provider: String, ids: Vec<String> },
+    ImportModels {
+        provider: String,
+        ids: Vec<String>,
+    },
     ChangeHome(String),
     RescanServers,
     RestartSelected,
+    DiscardChanges,
+    ExitUnsaved,
 }
 
 impl App {
@@ -59,6 +67,8 @@ impl App {
             }
             Dialog::ChangeHome { buffer } => self.dialog_change_home(ctx, buffer),
             Dialog::RestartServers => self.dialog_restart_servers(ctx),
+            Dialog::DiscardChanges => self.dialog_unsaved(ctx, false),
+            Dialog::ExitUnsaved => self.dialog_unsaved(ctx, true),
         };
         self.run(action);
     }
@@ -76,7 +86,12 @@ impl App {
                 self.create_blank_provider(&id);
                 self.dialog = None;
             }
-            Act::CreateModel { slug, display_name, provider, clone_from } => {
+            Act::CreateModel {
+                slug,
+                display_name,
+                provider,
+                clone_from,
+            } => {
                 self.create_model(&slug, &display_name, &provider, &clone_from);
                 self.dialog = None;
             }
@@ -114,10 +129,67 @@ impl App {
             }
             Act::RescanServers => self.rescan_servers(),
             Act::RestartSelected => self.run_restart_selected(),
+            Act::DiscardChanges => {
+                self.dialog = None;
+                self.discard();
+            }
+            Act::ExitUnsaved => {
+                self.dialog = None;
+                self.close_confirmed = true;
+            }
         }
     }
 
     // ---------------------------------------------------------------- dialogs
+
+    fn dialog_unsaved(&mut self, ctx: &Context, exiting: bool) -> Act {
+        let action = widgets::modal(
+            ctx,
+            "unsaved-changes",
+            if exiting {
+                "还有修改没有保存"
+            } else {
+                "要撤销这次修改吗？"
+            },
+            440.0,
+            |ui| {
+                widgets::note(
+                    ui,
+                    "未保存的设置和未应用的源文件草稿都会丢失。磁盘上已保存的配置不会受到影响。",
+                    theme::WARN,
+                );
+                ui.add_space(12.0);
+                let mut action = Act::None;
+                ui.horizontal(|ui| {
+                    if widgets::primary_button(ui, "继续编辑").clicked() {
+                        action = Act::Close;
+                    }
+                    if widgets::danger_button(
+                        ui,
+                        if exiting {
+                            "不保存并退出"
+                        } else {
+                            "确认撤销修改"
+                        },
+                    )
+                    .clicked()
+                    {
+                        action = if exiting {
+                            Act::ExitUnsaved
+                        } else {
+                            Act::DiscardChanges
+                        };
+                    }
+                });
+                action
+            },
+        )
+        .unwrap_or(Act::None);
+        if matches!(action, Act::ExitUnsaved) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        action
+    }
 
     fn dialog_new_provider(&mut self, ctx: &Context) -> Act {
         widgets::modal(ctx, "new-provider", "添加模型服务商", 820.0, |ui| {
@@ -217,7 +289,12 @@ impl App {
     }
 
     fn dialog_new_model(&mut self, ctx: &Context) -> Act {
-        let Dialog::NewModel { slug, display_name, provider, clone_from } = self.dialog.clone().unwrap()
+        let Dialog::NewModel {
+            slug,
+            display_name,
+            provider,
+            clone_from,
+        } = self.dialog.clone().unwrap()
         else {
             return Act::None;
         };
@@ -311,22 +388,32 @@ impl App {
         widgets::modal(ctx, "rename-provider", "重命名服务商", 520.0, |ui| {
             let mut action = Act::None;
             let mut next = buffer.clone();
-            ui.label(RichText::new(format!("把 [{old}] 改成什么名字？")).size(13.0).color(theme::TEXT_DIM));
+            ui.label(
+                RichText::new(format!("把 [{old}] 改成什么名字？"))
+                    .size(13.0)
+                    .color(theme::TEXT_DIM),
+            );
             ui.add_space(6.0);
             widgets::mono_field(ui, "rename-provider-id", &mut next, "my-provider");
             ui.label(
-                RichText::new("改名后，所有引用它的地方（当前服务商、模型绑定、配置档）都会自动跟着改。")
-                    .size(11.5)
-                    .color(theme::TEXT_MUTED),
+                RichText::new(
+                    "改名后，所有引用它的地方（当前服务商、模型绑定、配置档）都会自动跟着改。",
+                )
+                .size(11.5)
+                .color(theme::TEXT_MUTED),
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let trimmed = next.trim().to_string();
                 let ok = !trimmed.is_empty()
-                    && (trimmed == old || !provider_ops::exists(&self.doc.as_ref().unwrap().config, &trimmed));
+                    && (trimmed == old
+                        || !provider_ops::exists(&self.doc.as_ref().unwrap().config, &trimmed));
                 ui.add_enabled_ui(ok, |ui| {
                     if widgets::primary_button(ui, "重命名").clicked() {
-                        action = Act::RenameProvider { from: old.clone(), to: trimmed };
+                        action = Act::RenameProvider {
+                            from: old.clone(),
+                            to: trimmed,
+                        };
                     }
                 });
                 if widgets::ghost_button(ui, "取消").clicked() {
@@ -343,7 +430,11 @@ impl App {
         widgets::modal(ctx, "rename-model", "修改模型标识 slug", 520.0, |ui| {
             let mut action = Act::None;
             let mut next = buffer.clone();
-            ui.label(RichText::new("slug 必须和服务商那边的模型名完全一致，否则请求会失败。").size(12.5).color(theme::TEXT_DIM));
+            ui.label(
+                RichText::new("slug 必须和服务商那边的模型名完全一致，否则请求会失败。")
+                    .size(12.5)
+                    .color(theme::TEXT_DIM),
+            );
             ui.add_space(6.0);
             widgets::mono_field(ui, "rename-model-slug", &mut next, "gpt-5.2-codex");
             ui.add_space(8.0);
@@ -352,7 +443,10 @@ impl App {
                 let taken = self.model_slug_taken_elsewhere(&trimmed, index);
                 ui.add_enabled_ui(!trimmed.is_empty() && !taken, |ui| {
                     if widgets::primary_button(ui, "保存新 slug").clicked() {
-                        action = Act::RenameModel { index, slug: trimmed };
+                        action = Act::RenameModel {
+                            index,
+                            slug: trimmed,
+                        };
                     }
                 });
                 if widgets::ghost_button(ui, "取消").clicked() {
@@ -362,7 +456,10 @@ impl App {
             if taken_note(self, &next, index) {
                 widgets::note(ui, "已经有别的模型用了这个 slug。", theme::DANGER);
             }
-            self.dialog = Some(Dialog::RenameModel { index, buffer: next });
+            self.dialog = Some(Dialog::RenameModel {
+                index,
+                buffer: next,
+            });
             action
         })
         .unwrap_or(Act::None)
@@ -377,16 +474,34 @@ impl App {
             .is_some_and(|active| active == id);
         widgets::modal(ctx, "delete-provider", "删除服务商", 560.0, |ui| {
             let mut action = Act::None;
-            ui.label(RichText::new(format!("确定要删除服务商 [{id}] 吗？")).size(14.0).color(theme::TEXT));
-            ui.label(RichText::new("只会从配置里移除，不会动你的账号或密钥。保存之前都可以点「放弃修改」反悔。").size(12.0).color(theme::TEXT_DIM));
+            ui.label(
+                RichText::new(format!("确定要删除服务商 [{id}] 吗？"))
+                    .size(14.0)
+                    .color(theme::TEXT),
+            );
+            ui.label(
+                RichText::new(
+                    "只会从配置里移除，不会动你的账号或密钥。保存之前都可以点「放弃修改」反悔。",
+                )
+                .size(12.0)
+                .color(theme::TEXT_DIM),
+            );
             ui.add_space(8.0);
             if is_active {
-                widgets::note(ui, "这是「基础设置」里当前正在用的服务商，删除后 Codex 会连不上，记得换一个。", theme::WARN);
+                widgets::note(
+                    ui,
+                    "这是「基础设置」里当前正在用的服务商，删除后 Codex 会连不上，记得换一个。",
+                    theme::WARN,
+                );
             }
             if !affected.is_empty() {
                 widgets::note(
                     ui,
-                    &format!("有 {} 个模型绑定了它：{}", affected.len(), affected.join("、")),
+                    &format!(
+                        "有 {} 个模型绑定了它：{}",
+                        affected.len(),
+                        affected.join("、")
+                    ),
                     theme::WARN,
                 );
             }
@@ -435,7 +550,11 @@ impl App {
     fn dialog_delete_profile(&mut self, ctx: &Context, name: String) -> Act {
         widgets::modal(ctx, "delete-profile", "删除配置档", 520.0, |ui| {
             let mut action = Act::None;
-            ui.label(RichText::new(format!("确定要删除配置档「{name}」吗？")).size(14.0).color(theme::TEXT));
+            ui.label(
+                RichText::new(format!("确定要删除配置档「{name}」吗？"))
+                    .size(14.0)
+                    .color(theme::TEXT),
+            );
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if widgets::danger_button(ui, "删除").clicked() {
@@ -500,56 +619,88 @@ impl App {
         .unwrap_or(Act::None)
     }
 
-    fn dialog_import_remote(&mut self, ctx: &Context, provider: String, models: Vec<String>) -> Act {
+    fn dialog_import_remote(
+        &mut self,
+        ctx: &Context,
+        provider: String,
+        models: Vec<String>,
+    ) -> Act {
         let existing = self.model_slugs();
-        widgets::modal(ctx, "import-remote", "导入服务商的模型", 620.0, |ui| {
-            let mut action = Act::None;
-            ui.label(
-                RichText::new(format!("服务商 [{provider}] 返回了 {} 个模型。勾选想要的，一键加进模型目录。", models.len()))
+        widgets::modal(
+            ctx,
+            "import-remote",
+            "导入服务商的模型",
+            620.0,
+            |ui| {
+                let mut action = Act::None;
+                ui.label(
+                    RichText::new(format!(
+                        "服务商 [{provider}] 返回了 {} 个模型。勾选想要的，一键加进模型目录。",
+                        models.len()
+                    ))
                     .size(12.5)
                     .color(theme::TEXT_DIM),
-            );
-            ui.add_space(8.0);
-            if self.dialog_checkbox.len() != models.len() {
-                self.dialog_checkbox = vec![false; models.len()];
-            }
-            egui::ScrollArea::vertical()
-                .max_height(340.0)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    for (index, model) in models.iter().enumerate() {
-                        let already = existing.contains(model);
-                        ui.horizontal(|ui| {
-                            ui.add_enabled_ui(!already, |ui| {
-                                if ui.checkbox(&mut self.dialog_checkbox[index], "").changed() {}
-                            });
-                            ui.label(RichText::new(model).monospace().size(12.5).color(theme::TEXT));
-                            if already {
-                                widgets::badge(ui, "已在目录里", theme::TEXT_MUTED, theme::CARD_ALT);
-                            }
-                        });
-                    }
-                });
-            let picked: Vec<String> = models
-                .iter()
-                .zip(self.dialog_checkbox.iter())
-                .filter(|(_, checked)| **checked)
-                .map(|(model, _)| model.clone())
-                .collect();
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("已勾选 {} 个", picked.len())).size(12.0).color(theme::TEXT_DIM));
-                ui.add_enabled_ui(!picked.is_empty(), |ui| {
-                    if widgets::primary_button(ui, "导入所选模型").clicked() {
-                        action = Act::ImportModels { provider: provider.clone(), ids: picked.clone() };
-                    }
-                });
-                if widgets::ghost_button(ui, "取消").clicked() {
-                    action = Act::Close;
+                );
+                ui.add_space(8.0);
+                if self.dialog_checkbox.len() != models.len() {
+                    self.dialog_checkbox = vec![false; models.len()];
                 }
-            });
-            action
-        })
+                egui::ScrollArea::vertical()
+                    .max_height(340.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (index, model) in models.iter().enumerate() {
+                            let already = existing.contains(model);
+                            ui.horizontal(|ui| {
+                                ui.add_enabled_ui(!already, |ui| {
+                                    if ui.checkbox(&mut self.dialog_checkbox[index], "").changed() {
+                                    }
+                                });
+                                ui.label(
+                                    RichText::new(model)
+                                        .monospace()
+                                        .size(12.5)
+                                        .color(theme::TEXT),
+                                );
+                                if already {
+                                    widgets::badge(
+                                        ui,
+                                        "已在目录里",
+                                        theme::TEXT_MUTED,
+                                        theme::CARD_ALT,
+                                    );
+                                }
+                            });
+                        }
+                    });
+                let picked: Vec<String> = models
+                    .iter()
+                    .zip(self.dialog_checkbox.iter())
+                    .filter(|(_, checked)| **checked)
+                    .map(|(model, _)| model.clone())
+                    .collect();
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("已勾选 {} 个", picked.len()))
+                            .size(12.0)
+                            .color(theme::TEXT_DIM),
+                    );
+                    ui.add_enabled_ui(!picked.is_empty(), |ui| {
+                        if widgets::primary_button(ui, "导入所选模型").clicked() {
+                            action = Act::ImportModels {
+                                provider: provider.clone(),
+                                ids: picked.clone(),
+                            };
+                        }
+                    });
+                    if widgets::ghost_button(ui, "取消").clicked() {
+                        action = Act::Close;
+                    }
+                });
+                action
+            },
+        )
         .unwrap_or(Act::None)
     }
 
@@ -563,6 +714,10 @@ impl App {
                     .color(theme::TEXT_DIM),
             );
             ui.add_space(8.0);
+            let dirty = self.has_unsaved_changes();
+            if dirty {
+                widgets::note(ui, "当前还有未保存的修改。请先取消并保存，或明确选择放弃修改后载入。", theme::WARN);
+            }
             widgets::mono_field(ui, "home-path", &mut buffer, "~/.codex");
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -573,7 +728,9 @@ impl App {
                 }
                 let trimmed = buffer.trim().to_string();
                 ui.add_enabled_ui(!trimmed.is_empty(), |ui| {
-                    if widgets::primary_button(ui, "载入").clicked() {
+                    let response = if dirty { widgets::danger_button(ui, "放弃修改并载入") }
+                        else { widgets::primary_button(ui, "载入") };
+                    if response.clicked() {
                         action = Act::ChangeHome(trimmed.clone());
                     }
                 });
@@ -590,6 +747,9 @@ impl App {
     fn dialog_restart_servers(&mut self, ctx: &Context) -> Act {
         widgets::modal(ctx, "restart-servers", "重启 App Server（让配置生效）", 720.0, |ui| {
             let mut action = Act::None;
+            if self.has_unsaved_changes() {
+                widgets::note(ui, "你还有未保存的修改。重启只会读取磁盘上的旧配置，请先保存。", theme::WARN);
+            }
             ui.label(
                 RichText::new("Codex 的后台服务（App Server）在启动时只读取一次配置。改完配置后，需要重启对应的服务，新的模型 / 服务商 / 参数才会生效。\n下面列出了当前正在运行的 App Server，勾选要重启的即可——重启其实就是结束旧进程，宿主应用（ChatGPT、Zed 等）会自动拉起一个读取新配置的新进程。")
                     .size(12.5)
@@ -713,8 +873,12 @@ impl App {
         let Some(doc) = &mut self.doc else { return };
         let id = provider_ops::suggest_id(&doc.config, wanted);
         provider_ops::create(&mut doc.config, &id);
-        let view = provider_ops::view(&doc.config, &id)
-            .unwrap_or_else(|| crate::doc::providers::ProviderView { id: id.clone(), ..Default::default() });
+        let view = provider_ops::view(&doc.config, &id).unwrap_or_else(|| {
+            crate::doc::providers::ProviderView {
+                id: id.clone(),
+                ..Default::default()
+            }
+        });
         let mut editor = ProviderEditor::from_view(&view);
         editor.id = id.clone();
         editor.name = id.clone();
@@ -731,7 +895,11 @@ impl App {
             self.toast_error("还没有模型目录文件，先创建一个");
             return;
         }
-        let name = if display_name.trim().is_empty() { slug } else { display_name.trim() };
+        let name = if display_name.trim().is_empty() {
+            slug
+        } else {
+            display_name.trim()
+        };
         let new_model = if clone_from.is_empty() {
             catalog::new_model_template(slug, name, Some(provider).filter(|p| !p.is_empty()))
         } else {
@@ -743,11 +911,19 @@ impl App {
                 .cloned()
                 .unwrap_or_else(|| catalog::new_model_template(slug, name, None));
             catalog::set(&mut cloned, &["slug"], Value::String(slug.to_string()));
-            catalog::set(&mut cloned, &["display_name"], Value::String(name.to_string()));
+            catalog::set(
+                &mut cloned,
+                &["display_name"],
+                Value::String(name.to_string()),
+            );
             if provider.is_empty() {
                 catalog::remove(&mut cloned, &["provider"]);
             } else {
-                catalog::set(&mut cloned, &["provider"], Value::String(provider.to_string()));
+                catalog::set(
+                    &mut cloned,
+                    &["provider"],
+                    Value::String(provider.to_string()),
+                );
             }
             cloned
         };
@@ -760,7 +936,9 @@ impl App {
         self.editing_model = None;
         self.select_model(new_index);
         self.page = Page::Models;
-        self.toast_info(format!("已添加模型 {slug}，检查一下上下文窗口和推理档位再保存"));
+        self.toast_info(format!(
+            "已添加模型 {slug}，检查一下上下文窗口和推理档位再保存"
+        ));
     }
 
     fn rename_provider(&mut self, from: &str, to: &str) {
@@ -878,26 +1056,13 @@ impl App {
 
     fn create_catalog(&mut self, filename: &str) {
         let Some(doc) = &mut self.doc else { return };
-        let path = doc.resolve_against_home(filename);
-        if path.exists() {
-            self.toast_error(format!("{} 已经存在，换个名字", path.display()));
+        if let Err(err) = doc.create_catalog(filename) {
+            self.toast_error(format!("{err:#}"));
             return;
         }
-        let starter = catalog::new_model_template("my-first-model", "我的第一个模型", None);
-        let mut root = Map::new();
-        root.insert("models".into(), Value::Array(vec![starter]));
-        let value = Value::Object(root);
-        if let Err(err) = fs::write(&path, pretty_json(&value)) {
-            self.toast_error(format!("写入 {} 失败：{err}", path.display()));
-            return;
-        }
-        doc.config
-            .set_value_at(&["model_catalog_json"], value_str(filename));
-        doc.reload_catalog();
         self.editing_model = None;
-        self.select_model(0);
         self.page = Page::Models;
-        self.toast_info(format!("已创建 {} 并写入 config.toml", path.display()));
+        self.toast_info("空白模型目录已准备好。添加模型后点「保存配置」才会写入文件。");
     }
 
     pub fn set_catalog_path(&mut self, path: std::path::PathBuf) {
@@ -943,7 +1108,9 @@ impl App {
                 added += 1;
             }
         }
-        self.toast_info(format!("已导入 {added} 个模型，记得检查上下文窗口等参数再保存"));
+        self.toast_info(format!(
+            "已导入 {added} 个模型，记得检查上下文窗口等参数再保存"
+        ));
     }
 
     // ---------------------------------------------------------------- helpers
@@ -988,7 +1155,9 @@ impl App {
     }
 
     pub fn provider_options(&self) -> Vec<(String, String)> {
-        let Some(doc) = &self.doc else { return Vec::new() };
+        let Some(doc) = &self.doc else {
+            return Vec::new();
+        };
         doc.selectable_provider_ids()
             .iter()
             .map(|id| (id.clone(), doc.provider_display(id)))

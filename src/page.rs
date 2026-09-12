@@ -22,7 +22,7 @@ impl Page {
 
     pub fn title(self) -> &'static str {
         match self {
-            Page::Overview => "基础设置",
+            Page::Overview => "开始使用",
             Page::Models => "模型管理",
             Page::Providers => "服务商",
             Page::Profiles => "配置档",
@@ -33,12 +33,12 @@ impl Page {
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            Page::Overview => "最常用的几个开关：用哪个模型、连哪个服务商、权限多大",
-            Page::Models => "添加、修改、删除 Codex 能选择的模型（写入模型目录 JSON）",
-            Page::Providers => "配置模型服务商：地址、协议、密钥（写入 config.toml）",
-            Page::Profiles => "把「模型 + 服务商 + 权限」存成一组，一键切换",
-            Page::Advanced => "实验功能、终端界面、MCP 服务等进阶开关",
-            Page::Raw => "直接看和改原始文件，保存前可以对比差异",
+            Page::Overview => "选好模型，放心开始。复杂的设置，交给我们整理。",
+            Page::Models => "挑一个适合你的 AI。可以随时切换，也可以添加新模型。",
+            Page::Providers => "连接你的 AI 服务。选好模板，再填入自己的地址和密钥。",
+            Page::Profiles => "工作、学习、日常使用，把常用设置存成一组。",
+            Page::Advanced => "按需调整进阶功能。不确定的选项，保持默认就好。",
+            Page::Raw => "为熟悉配置文件的你保留。修改后先应用，再保存。",
         }
     }
 

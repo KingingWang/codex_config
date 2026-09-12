@@ -1,30 +1,92 @@
-//! The look of the app: colours, fonts (with CJK support) and widget defaults.
+//! The look of the app: warm, approachable light theme with botanical green accents.
+//! Designed for beginners: clear hierarchy, generous spacing, and gentle colors.
 
-use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Margin, Stroke, Style, TextStyle, Visuals};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Margin, Stroke, Style,
+    TextStyle, Visuals,
+};
 
-pub const ACCENT: Color32 = Color32::from_rgb(0x5B, 0x8C, 0xFF);
-pub const ACCENT_HI: Color32 = Color32::from_rgb(0x7E, 0xA6, 0xFF);
-pub const ACCENT_WEAK: Color32 = Color32::from_rgb(0x1B, 0x2A, 0x4A);
-pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0xC7, 0xDB, 0xFF);
+// -- Primary palette: botanical green on warm paper -------------------------
 
-pub const BG: Color32 = Color32::from_rgb(0x0B, 0x0E, 0x14);
-pub const PANEL: Color32 = Color32::from_rgb(0x10, 0x14, 0x1C);
-pub const CARD: Color32 = Color32::from_rgb(0x16, 0x1B, 0x25);
-pub const CARD_ALT: Color32 = Color32::from_rgb(0x1D, 0x24, 0x30);
-pub const INPUT_BG: Color32 = Color32::from_rgb(0x0E, 0x12, 0x19);
-pub const BORDER: Color32 = Color32::from_rgb(0x25, 0x2E, 0x3C);
-pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x37, 0x44, 0x56);
+/// Warm paper background - the canvas everything sits on.
+pub const BG: Color32 = Color32::from_rgb(0xF5, 0xF6, 0xF2);
 
-pub const TEXT: Color32 = Color32::from_rgb(0xEC, 0xF1, 0xF8);
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0xA2, 0xB0, 0xC1);
-pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x6E, 0x7B, 0x8D);
+/// Slightly darker panel/sidebar background.
+pub const PANEL: Color32 = Color32::from_rgb(0xFC, 0xFC, 0xF9);
 
-pub const OK: Color32 = Color32::from_rgb(0x53, 0xE0, 0x8C);
-pub const OK_WEAK: Color32 = Color32::from_rgb(0x11, 0x2C, 0x1F);
-pub const WARN: Color32 = Color32::from_rgb(0xF5, 0xC5, 0x59);
-pub const WARN_WEAK: Color32 = Color32::from_rgb(0x2E, 0x26, 0x12);
-pub const DANGER: Color32 = Color32::from_rgb(0xFF, 0x74, 0x74);
-pub const DANGER_WEAK: Color32 = Color32::from_rgb(0x33, 0x18, 0x1B);
+/// White card surfaces for content areas.
+pub const CARD: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
+
+/// Slightly off-white for alternating rows or subtle differentiation.
+pub const CARD_ALT: Color32 = Color32::from_rgb(0xF2, 0xF5, 0xF1);
+
+/// Input field backgrounds - a touch warmer than pure white.
+pub const INPUT_BG: Color32 = Color32::from_rgb(0xFE, 0xFE, 0xFE);
+
+/// Subtle borders that don't shout.
+pub const BORDER: Color32 = Color32::from_rgb(0xE0, 0xE6, 0xDE);
+
+/// Stronger borders for focus/active states.
+pub const BORDER_STRONG: Color32 = Color32::from_rgb(0xD0, 0xD5, 0xDA);
+
+// -- Text colors: ink on paper ----------------------------------------------
+
+/// Primary text - deep ink.
+pub const TEXT: Color32 = Color32::from_rgb(0x24, 0x3A, 0x35);
+
+/// Secondary text - slightly lighter ink.
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0x55, 0x68, 0x61);
+
+/// Muted text for hints and metadata.
+pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x69, 0x76, 0x6F);
+
+// -- Accent: botanical green ------------------------------------------------
+
+/// Primary accent - rich botanical green.
+pub const ACCENT: Color32 = Color32::from_rgb(0x26, 0x71, 0x5B);
+
+/// Hover/active accent - slightly brighter.
+pub const ACCENT_HI: Color32 = Color32::from_rgb(0x1C, 0x60, 0x4D);
+
+/// Weak accent for backgrounds.
+pub const ACCENT_WEAK: Color32 = Color32::from_rgb(0xE8, 0xF0, 0xE7);
+
+/// Accent text on dark backgrounds.
+pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0x26, 0x67, 0x51);
+
+/// Pale sage for selections.
+pub const SAGE: Color32 = Color32::from_rgb(0xD4, 0xED, 0xE4);
+
+/// Pale sage selection background.
+pub const SAGE_WEAK: Color32 = Color32::from_rgb(0xE8, 0xF7, 0xEE);
+
+// -- Semantic colors: gentle but clear --------------------------------------
+
+/// Success/OK - soft green.
+pub const OK: Color32 = ACCENT;
+
+/// OK background tint.
+pub const OK_WEAK: Color32 = Color32::from_rgb(0xE8, 0xF8, 0xF3);
+
+/// Warning - amber, not harsh yellow.
+pub const WARN: Color32 = Color32::from_rgb(0x92, 0x60, 0x18);
+
+/// Warning background tint.
+pub const WARN_WEAK: Color32 = Color32::from_rgb(0xFF, 0xF3, 0xE0);
+
+/// Danger/error - calm red, not screaming.
+pub const DANGER: Color32 = Color32::from_rgb(0xB3, 0x41, 0x3D);
+
+/// Danger background tint.
+pub const DANGER_WEAK: Color32 = Color32::from_rgb(0xFD, 0xEB, 0xEB);
+
+/// Info - soft blue-green.
+pub const INFO: Color32 = Color32::from_rgb(0x3A, 0x8E, 0xD4);
+
+/// Info background tint.
+pub const INFO_WEAK: Color32 = Color32::from_rgb(0xE8, 0xF2, 0xFC);
+
+// -- Fonts ------------------------------------------------------------------
 
 /// Fonts we try, in order, for CJK glyph coverage.
 const CJK_CANDIDATES: &[&str] = &[
@@ -59,9 +121,10 @@ pub fn install(ctx: &egui::Context) -> Option<String> {
     let mut loaded: Option<String> = None;
 
     if let Some((name, bytes)) = first_readable(CJK_CANDIDATES) {
-        fonts
-            .font_data
-            .insert(name.clone(), std::sync::Arc::new(FontData::from_owned(bytes)));
+        fonts.font_data.insert(
+            name.clone(),
+            std::sync::Arc::new(FontData::from_owned(bytes)),
+        );
         fonts
             .families
             .entry(FontFamily::Proportional)
@@ -77,9 +140,10 @@ pub fn install(ctx: &egui::Context) -> Option<String> {
 
     if let Some((name, bytes)) = first_readable(MONO_CANDIDATES) {
         let key = format!("{name}-mono");
-        fonts
-            .font_data
-            .insert(key.clone(), std::sync::Arc::new(FontData::from_owned(bytes)));
+        fonts.font_data.insert(
+            key.clone(),
+            std::sync::Arc::new(FontData::from_owned(bytes)),
+        );
         // Put the mono face first in the monospace family, keep CJK as fallback.
         let family = fonts.families.entry(FontFamily::Monospace).or_default();
         family.insert(0, key);
@@ -89,15 +153,21 @@ pub fn install(ctx: &egui::Context) -> Option<String> {
         .families
         .entry(FontFamily::Proportional)
         .or_default()
-        .sort_by_key(|name| if name.contains("emoji") || name.contains("Emoji") { 1 } else { 0 });
+        .sort_by_key(|name| {
+            if name.contains("emoji") || name.contains("Emoji") {
+                1
+            } else {
+                0
+            }
+        });
 
     // Phosphor gives us a full set of crisp vector icons that mix straight into
     // ordinary labels — no more relying on lone CJK glyphs as makeshift icons.
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
     ctx.set_fonts(fonts);
-    ctx.options_mut(|options| options.theme_preference = egui::ThemePreference::Dark);
-    ctx.set_style_of(egui::Theme::Dark, style());
+    ctx.options_mut(|options| options.theme_preference = egui::ThemePreference::Light);
+    ctx.set_style_of(egui::Theme::Light, style());
     loaded
 }
 
@@ -119,50 +189,58 @@ fn first_readable(candidates: &[&str]) -> Option<(String, Vec<u8>)> {
 pub fn style() -> Style {
     let mut style = Style::default();
 
+    // Typography: clear hierarchy with generous sizing
     style.text_styles = [
-        (TextStyle::Heading, egui::FontId::proportional(21.0)),
-        (TextStyle::Body, egui::FontId::proportional(14.5)),
-        (TextStyle::Monospace, egui::FontId::monospace(13.0)),
-        (TextStyle::Button, egui::FontId::proportional(14.0)),
-        (TextStyle::Small, egui::FontId::proportional(12.0)),
+        (TextStyle::Heading, egui::FontId::proportional(26.0)), // Large headings
+        (TextStyle::Body, egui::FontId::proportional(15.0)),    // Body text
+        (TextStyle::Monospace, egui::FontId::monospace(13.5)),  // Code/IDs
+        (TextStyle::Button, egui::FontId::proportional(14.5)),  // Button text
+        (TextStyle::Small, egui::FontId::proportional(13.0)),   // Small text
     ]
     .into();
 
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(12.0, 7.0);
-    style.spacing.interact_size = egui::vec2(120.0, 26.0);
-    style.spacing.combo_width = 90.0;
+    // Spacing: 8pt rhythm, generous padding
+    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
+    style.spacing.button_padding = egui::vec2(12.0, 8.0);
+    style.spacing.interact_size = egui::vec2(120.0, 36.0);
+    style.spacing.combo_width = 100.0;
     style.spacing.scroll = egui::style::ScrollStyle {
-        bar_width: 9.0,
+        bar_width: 10.0,
         ..Default::default()
     };
-    style.spacing.window_margin = Margin::same(12);
+    style.spacing.window_margin = Margin::same(16);
 
-    let mut visuals = Visuals::dark();
+    let mut visuals = Visuals::light();
     visuals.panel_fill = BG;
-    visuals.window_fill = PANEL;
+    visuals.window_fill = CARD;
     visuals.extreme_bg_color = INPUT_BG;
-    visuals.faint_bg_color = CARD;
-    visuals.dark_mode = true;
-    visuals.hyperlink_color = ACCENT_TEXT;
-    visuals.selection.bg_fill = ACCENT.linear_multiply(0.35);
-    visuals.selection.stroke = Stroke::new(1.0, ACCENT_TEXT);
-    visuals.window_corner_radius = CornerRadius::same(14);
-    visuals.menu_corner_radius = CornerRadius::same(10);
+    visuals.faint_bg_color = CARD_ALT;
+    visuals.dark_mode = false;
+    visuals.hyperlink_color = ACCENT_HI;
+    visuals.selection.bg_fill = SAGE_WEAK;
+    visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+    visuals.window_corner_radius = CornerRadius::same(16);
+    visuals.menu_corner_radius = CornerRadius::same(12);
+    // Subtle shadows for depth, not heavy
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [0, 6],
-        spread: 24,
-        blur: 40,
-        color: Color32::from_black_alpha(140),
+        offset: [0, 4],
+        spread: 12,
+        blur: 24,
+        color: Color32::from_black_alpha(25),
     };
-    visuals.popup_shadow = visuals.window_shadow;
+    visuals.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 2],
+        spread: 8,
+        blur: 16,
+        color: Color32::from_black_alpha(20),
+    };
 
     // Non interactive widgets (labels, frames)
     visuals.widgets.noninteractive.bg_fill = CARD;
-    visuals.widgets.noninteractive.weak_bg_fill = CARD;
+    visuals.widgets.noninteractive.weak_bg_fill = CARD_ALT;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(10);
+    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(12);
     visuals.widgets.noninteractive.expansion = 0.0;
 
     // Buttons, checkboxes, ...
@@ -170,55 +248,64 @@ pub fn style() -> Style {
     visuals.widgets.inactive.weak_bg_fill = CARD_ALT;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
-    visuals.widgets.inactive.corner_radius = CornerRadius::same(8);
+    visuals.widgets.inactive.corner_radius = CornerRadius::same(10);
     visuals.widgets.inactive.expansion = 0.0;
 
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x24, 0x2D, 0x3A);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x24, 0x2D, 0x3A);
+    visuals.widgets.hovered.bg_fill = SAGE_WEAK;
+    visuals.widgets.hovered.weak_bg_fill = SAGE_WEAK;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.25, Color32::WHITE);
-    visuals.widgets.hovered.corner_radius = CornerRadius::same(8);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.25, TEXT);
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(10);
     visuals.widgets.hovered.expansion = 0.5;
 
     visuals.widgets.active.bg_fill = ACCENT_WEAK;
     visuals.widgets.active.weak_bg_fill = ACCENT_WEAK;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
     visuals.widgets.active.fg_stroke = Stroke::new(1.25, ACCENT_TEXT);
-    visuals.widgets.active.corner_radius = CornerRadius::same(8);
+    visuals.widgets.active.corner_radius = CornerRadius::same(10);
     visuals.widgets.active.expansion = 0.5;
 
     visuals.widgets.open.bg_fill = CARD_ALT;
     visuals.widgets.open.weak_bg_fill = CARD_ALT;
     visuals.widgets.open.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, TEXT);
-    visuals.widgets.open.corner_radius = CornerRadius::same(8);
+    visuals.widgets.open.corner_radius = CornerRadius::same(10);
 
     style.visuals = visuals;
     style
 }
 
-/// Frame used for content "cards".
+/// Frame used for content "cards" - white surface with subtle border.
 pub fn card_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(CARD)
         .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(CornerRadius::same(14))
+        .corner_radius(CornerRadius::same(16))
         .inner_margin(Margin::same(20))
 }
 
+/// Subtle frame for input areas and secondary content.
 pub fn subtle_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(INPUT_BG)
         .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(12))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(Margin::same(14))
 }
 
 /// A soft-tinted frame keyed to an accent colour, used behind section icons and
 /// highlight callouts.
 pub fn tint_frame(color: Color32, radius: u8) -> egui::Frame {
     egui::Frame::new()
-        .fill(color.gamma_multiply(0.16))
-        .stroke(Stroke::new(1.0, color.gamma_multiply(0.42)))
+        .fill(color.gamma_multiply(0.12))
+        .stroke(Stroke::new(1.0, color.gamma_multiply(0.3)))
         .corner_radius(CornerRadius::same(radius))
+}
+
+/// Panel background frame - slightly darker than main canvas.
+pub fn panel_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .inner_margin(Margin::same(16))
 }

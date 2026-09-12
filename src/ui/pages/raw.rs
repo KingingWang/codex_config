@@ -5,6 +5,7 @@ use toml_edit::DocumentMut;
 
 use crate::app::App;
 use crate::doc::pretty_json;
+use crate::doc::toml_ext::TomlPathExt;
 use crate::ui::icons;
 use crate::ui::theme;
 use crate::ui::widgets;
@@ -12,7 +13,11 @@ use crate::ui::widgets;
 pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     let Some(doc) = &app.doc else { return };
     let is_catalog = app.raw_tab_is_catalog;
-    let current = if is_catalog { doc.catalog_text() } else { doc.config_text() };
+    let current = if is_catalog {
+        doc.catalog_text()
+    } else {
+        doc.config_text()
+    };
     let path_text = if is_catalog {
         doc.catalog_path
             .as_ref()
@@ -23,26 +28,39 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     };
 
     // Load the buffer the first time, or when the tab changes.
-    let tab_key = format!("{}{}", if is_catalog { "catalog" } else { "config" }, path_text);
+    let tab_key = format!(
+        "{}{}",
+        if is_catalog { "catalog" } else { "config" },
+        path_text
+    );
     if app.raw_source != tab_key {
         app.raw_source = tab_key;
         app.raw_buffer = current.clone();
         app.raw_origin = current.clone();
     }
     let origin = app.raw_origin.clone();
+    let has_draft = app.raw_buffer != origin;
 
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             let config_selected = !app.raw_tab_is_catalog;
             if ui
-                .selectable_label(config_selected, RichText::new("config.toml").size(13.0))
+                .add_enabled(
+                    config_selected || !has_draft,
+                    egui::Button::selectable(config_selected, "config.toml"),
+                )
+                .on_hover_text("切换前请先应用或放弃当前草稿")
                 .clicked()
             {
                 app.raw_tab_is_catalog = false;
             }
             if ui
-                .selectable_label(!config_selected, RichText::new("模型目录 JSON").size(13.0))
+                .add_enabled(
+                    !config_selected || !has_draft,
+                    egui::Button::selectable(!config_selected, "模型目录 JSON"),
+                )
+                .on_hover_text("切换前请先应用或放弃当前草稿")
                 .clicked()
             {
                 app.raw_tab_is_catalog = true;
@@ -59,7 +77,7 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         ui.add_space(6.0);
         widgets::note(
             ui,
-            "这里是「专家模式」：直接改原始文件内容。改完点「应用到编辑器」，其它页面会立刻同步；\n点右上角「保存」才会真正写入磁盘（会自动备份）。",
+            "直接编辑配置文件。改完先「应用到编辑器」，再点右上角「保存配置」。有未应用草稿时，请先应用或放弃，再切换文件。",
             theme::TEXT_DIM,
         );
     });
@@ -90,7 +108,8 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
 
     let validity = if is_catalog {
         match serde_json::from_str::<serde_json::Value>(&app.raw_buffer) {
-            Ok(_) => Ok(()),
+            Ok(value) if value.get("models").is_some_and(serde_json::Value::is_array) => Ok(()),
+            Ok(_) => Err("模型目录需要包含 models 数组".to_string()),
             Err(err) => Err(format!("JSON 解析失败：{err}")),
         }
     } else {
@@ -109,7 +128,11 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         .desired_width(f32::INFINITY)
         .desired_rows((height / 15.0).max(10.0) as usize)
         .lock_focus(true)
-        .id(egui::Id::new(if is_catalog { "raw-catalog" } else { "raw-config" }));
+        .id(egui::Id::new(if is_catalog {
+            "raw-catalog"
+        } else {
+            "raw-config"
+        }));
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .max_height(height)
@@ -119,14 +142,19 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
 
     ui.add_space(8.0);
     match &validity {
-        Ok(()) => widgets::note(ui, &format!("{} 格式正确，可以应用。", icons::CHECK), theme::OK),
+        Ok(()) => widgets::note(
+            ui,
+            &format!("{} 格式正确，可以应用。", icons::CHECK),
+            theme::OK,
+        ),
         Err(err) => widgets::note(ui, err, theme::DANGER),
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         let can_apply = validity.is_ok() && app.raw_buffer != origin;
         ui.add_enabled_ui(can_apply, |ui| {
-            if widgets::primary_button(ui, &format!("{} 应用到编辑器", icons::CHECK)).clicked() {
+            if widgets::primary_button(ui, &format!("{} 应用到编辑器", icons::CHECK)).clicked()
+            {
                 let buffer = app.raw_buffer.clone();
                 let result = if is_catalog {
                     if let Some(doc) = &mut app.doc {
@@ -142,12 +170,21 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
                 match result {
                     Ok(()) => {
                         app.raw_origin = buffer;
-                        if let Some(doc) = &mut app.doc {
-                            doc.reload_catalog();
+                        if !is_catalog && let Some(doc) = &mut app.doc {
+                            let desired_path = doc
+                                .config
+                                .str_at(&["model_catalog_json"])
+                                .filter(|value| !value.trim().is_empty())
+                                .map(|value| doc.resolve_against_home(&value));
+                            if desired_path != doc.catalog_path {
+                                doc.reload_catalog();
+                            }
                         }
                         app.editing_model = None;
                         app.editing_provider = None;
                         app.provider_editor = None;
+                        app.editing_profile = None;
+                        app.profile_editor = None;
                         app.toast_info("已应用，其它页面已经同步");
                     }
                     Err(err) => app.toast_error(format!("应用失败：{err:#}")),

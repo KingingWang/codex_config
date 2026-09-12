@@ -1,10 +1,16 @@
 //! Reusable UI building blocks. Everything that needs to *explain itself* to a
 //! beginner lives here: labels always show the real config key plus a plain
 //! language description.
+//!
+//! Design principles:
+//! - One obvious next action
+//! - Explain the task before exposing implementation details
+//! - Progressive disclosure for rare settings
+//! - Generous spacing and clear visual hierarchy
 
 use egui::{Align, Color32, CornerRadius, Id, Margin, RichText, Sense, Stroke, Ui, Vec2};
 
-use crate::doc::schema::{Choice, WireApi, UNSET, choice_help, choice_label};
+use crate::doc::schema::{Choice, UNSET, WireApi, choice_help};
 use crate::ui::icons;
 use crate::ui::theme;
 
@@ -12,18 +18,21 @@ use crate::ui::theme;
 // Layout helpers
 // ---------------------------------------------------------------------------
 
+/// Page header with icon, title and subtitle. More spacious and welcoming.
 pub fn page_header(ui: &mut Ui, icon: &str, title: &str, subtitle: &str) {
-    ui.add_space(2.0);
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
-        icon_tile(ui, icon, 38.0, 22.0, theme::ACCENT);
-        ui.add_space(10.0);
+        icon_tile(ui, icon, 42.0, 24.0, theme::ACCENT);
+        ui.add_space(14.0);
         ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
-            ui.label(RichText::new(title).size(23.0).strong().color(theme::TEXT));
-            ui.label(RichText::new(subtitle).size(13.0).color(theme::TEXT_DIM));
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.label(RichText::new(title).size(26.0).strong().color(theme::TEXT));
+            if !subtitle.is_empty() {
+                ui.label(RichText::new(subtitle).size(14.0).color(theme::TEXT_DIM));
+            }
         });
     });
-    ui.add_space(12.0);
+    ui.add_space(16.0);
 }
 
 /// A rounded tile with a single vector icon centred inside — used for page and
@@ -33,9 +42,9 @@ pub fn icon_tile(ui: &mut Ui, glyph: &str, size: f32, icon_size: f32, accent: Co
     let painter = ui.painter();
     painter.rect(
         rect,
-        CornerRadius::same((size * 0.3) as u8),
-        accent.gamma_multiply(0.16),
-        Stroke::new(1.0, accent.gamma_multiply(0.5)),
+        CornerRadius::same((size * 0.28) as u8),
+        accent.gamma_multiply(0.12),
+        Stroke::new(1.0, accent.gamma_multiply(0.35)),
         egui::StrokeKind::Inside,
     );
     painter.text(
@@ -52,30 +61,61 @@ pub fn icon_chip(ui: &mut Ui, glyph: &str, size: f32, icon_size: f32) {
     icon_tile(ui, glyph, size, icon_size, theme::ACCENT);
 }
 
+/// White card with rounded corners and subtle border.
 pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     theme::card_frame().show(ui, add).inner
 }
 
 /// A card with an icon, a title and an optional subtitle.
-pub fn section<R>(ui: &mut Ui, icon: &str, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+pub fn section<R>(
+    ui: &mut Ui,
+    icon: &str,
+    title: &str,
+    subtitle: &str,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
     card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             if !icon.is_empty() {
-                icon_tile(ui, icon, 30.0, 17.0, theme::ACCENT);
-                ui.add_space(8.0);
+                icon_tile(ui, icon, 34.0, 18.0, theme::ACCENT);
+                ui.add_space(10.0);
             }
             ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.label(RichText::new(title).size(16.0).strong().color(theme::TEXT));
+                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.label(RichText::new(title).size(17.0).strong().color(theme::TEXT));
                 if !subtitle.is_empty() {
-                    ui.label(RichText::new(subtitle).size(12.5).color(theme::TEXT_DIM));
+                    ui.label(RichText::new(subtitle).size(13.0).color(theme::TEXT_DIM));
                 }
             });
         });
-        ui.add_space(10.0);
+        ui.add_space(14.0);
         ui.separator();
-        ui.add_space(10.0);
+        ui.add_space(14.0);
+        add(ui)
+    })
+}
+
+/// A prominent welcome section with a clear call to action.
+pub fn welcome_section<R>(
+    ui: &mut Ui,
+    icon: &str,
+    title: &str,
+    subtitle: &str,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.vertical_centered(|ui| {
+            wrap(ui);
+            icon_tile(ui, icon, 56.0, 30.0, theme::ACCENT);
+            ui.add_space(12.0);
+            ui.label(RichText::new(title).size(22.0).strong().color(theme::TEXT));
+            ui.add_space(4.0);
+            ui.set_max_width(500.0);
+            ui.label(RichText::new(subtitle).size(14.0).color(theme::TEXT_DIM));
+        });
+        ui.add_space(16.0);
         add(ui)
     })
 }
@@ -93,36 +133,41 @@ impl<'a> FieldSpec<'a> {
 }
 
 /// The workhorse row: explanation on the left, control on the right.
+/// More spacious and beginner-friendly.
 pub fn field<R>(ui: &mut Ui, spec: FieldSpec<'_>, add: impl FnOnce(&mut Ui) -> R) -> R {
     let total = ui.available_width();
-    let label_w = (total * 0.46).clamp(230.0, 430.0);
+    let label = |ui: &mut Ui| {
+        ui.label(
+            RichText::new(spec.label)
+                .size(14.0)
+                .strong()
+                .color(theme::TEXT),
+        )
+        .on_hover_text(format!("配置字段：{}\n{}", spec.key, spec.help));
+        if !spec.help.is_empty() {
+            ui.label(RichText::new(spec.help).size(12.0).color(theme::TEXT_DIM));
+        }
+    };
+    if total < 620.0 {
+        label(ui);
+        let result = add(ui);
+        ui.add_space(8.0);
+        return result;
+    }
+    let label_w = (total * 0.42).min(360.0);
     let response = ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             wrap(ui);
             ui.set_width(label_w);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(spec.label).size(13.5).strong().color(theme::TEXT));
-                if !spec.key.is_empty() {
-                    code_chip(ui, spec.key);
-                }
-            });
-            if !spec.help.is_empty() {
-                ui.label(
-                    RichText::new(spec.help)
-                        .size(12.0)
-                        .color(theme::TEXT_DIM)
-                        ,
-                );
-            }
+            label(ui);
         });
         ui.vertical(|ui| {
-            ui.set_min_width(240.0);
-            ui.set_max_width((total - label_w - 24.0).max(200.0));
+            ui.set_width((total - label_w - 20.0).max(0.0));
             add(ui)
         })
         .inner
     });
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     response.inner
 }
 
@@ -131,34 +176,35 @@ pub fn code_chip(ui: &mut Ui, key: &str) {
     let frame = egui::Frame::new()
         .fill(theme::INPUT_BG)
         .stroke(Stroke::new(1.0, theme::BORDER))
-        .corner_radius(CornerRadius::same(5))
-        .inner_margin(Margin::symmetric(5, 1));
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(6, 2));
     frame
         .show(ui, |ui| {
-            ui.label(RichText::new(key).monospace().size(11.0).color(theme::TEXT_MUTED));
+            ui.label(
+                RichText::new(key)
+                    .monospace()
+                    .size(11.5)
+                    .color(theme::TEXT_MUTED),
+            );
         })
         .response
         .on_hover_text(format!("配置文件里的真实字段名：{key}"));
 }
 
 pub fn hint(ui: &mut Ui, text: &str) {
-    ui.label(
-        RichText::new(text)
-            .size(12.0)
-            .color(theme::TEXT_MUTED)
-            ,
-    );
+    ui.label(RichText::new(text).size(12.5).color(theme::TEXT_MUTED));
 }
 
+/// A friendly note box with an icon and colored background.
 pub fn note(ui: &mut Ui, text: &str, color: Color32) {
     let frame = egui::Frame::new()
-        .fill(color.gamma_multiply(0.13))
-        .stroke(Stroke::new(1.0, color.gamma_multiply(0.45)))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(Margin::same(10));
+        .fill(color.gamma_multiply(0.1))
+        .stroke(Stroke::new(1.0, color.gamma_multiply(0.35)))
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(Margin::same(14));
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new(text).size(12.5).color(color));
+        ui.label(RichText::new(text).size(13.0).color(color));
     });
 }
 
@@ -180,7 +226,12 @@ pub fn count_pill(ui: &mut Ui, count: usize, fg: Color32, bg: Color32) {
         .corner_radius(CornerRadius::same(9))
         .inner_margin(Margin::symmetric(7, 1));
     frame.show(ui, |ui| {
-        ui.label(RichText::new(count.to_string()).size(11.0).strong().color(fg));
+        ui.label(
+            RichText::new(count.to_string())
+                .size(11.0)
+                .strong()
+                .color(fg),
+        );
     });
 }
 
@@ -192,8 +243,7 @@ pub fn kv_row(ui: &mut Ui, key: &str, value: &str) {
             RichText::new(value)
                 .size(12.5)
                 .monospace()
-                .color(theme::TEXT_DIM)
-                ,
+                .color(theme::TEXT_DIM),
         );
     });
 }
@@ -205,41 +255,63 @@ pub fn kv_row(ui: &mut Ui, key: &str, value: &str) {
 /// Single line text field with a placeholder. Returns true when changed.
 pub fn text_field(ui: &mut Ui, id: &str, value: &mut String, placeholder: &str) -> bool {
     let edit = egui::TextEdit::singleline(value)
-        .hint_text(RichText::new(placeholder).color(theme::TEXT_MUTED).size(13.0))
+        .hint_text(
+            RichText::new(placeholder)
+                .color(theme::TEXT_MUTED)
+                .size(13.0),
+        )
         .vertical_align(Align::Center)
         .id(Id::new(id));
-    ui.add_sized(Vec2::new(ui.available_width().max(140.0), 32.0), edit)
+    ui.add_sized(Vec2::new(ui.available_width().max(140.0), 36.0), edit)
         .changed()
 }
 
 pub fn mono_field(ui: &mut Ui, id: &str, value: &mut String, placeholder: &str) -> bool {
     let edit = egui::TextEdit::singleline(value)
         .font(egui::TextStyle::Monospace)
-        .hint_text(RichText::new(placeholder).color(theme::TEXT_MUTED).size(13.0))
+        .hint_text(
+            RichText::new(placeholder)
+                .color(theme::TEXT_MUTED)
+                .size(13.0),
+        )
         .id(Id::new(id))
         .vertical_align(Align::Center);
-    ui.add_sized(Vec2::new(ui.available_width().max(140.0), 32.0), edit)
+    ui.add_sized(Vec2::new(ui.available_width().max(140.0), 36.0), edit)
         .changed()
 }
 
 /// Text field with an explicit width — use inside `horizontal` rows so the row
 /// cannot grow past its container (Areas size themselves to their content).
-pub fn text_field_w(ui: &mut Ui, id: &str, value: &mut String, placeholder: &str, width: f32) -> bool {
+pub fn text_field_w(
+    ui: &mut Ui,
+    id: &str,
+    value: &mut String,
+    placeholder: &str,
+    width: f32,
+) -> bool {
     let edit = egui::TextEdit::singleline(value)
-        .hint_text(RichText::new(placeholder).color(theme::TEXT_MUTED).size(13.0))
+        .hint_text(
+            RichText::new(placeholder)
+                .color(theme::TEXT_MUTED)
+                .size(13.0),
+        )
         .vertical_align(Align::Center)
         .id(Id::new(id));
-    ui.add_sized(Vec2::new(width, 32.0), edit).changed()
+    ui.add_sized(Vec2::new(width, 36.0), edit).changed()
 }
 
 pub fn password_field(ui: &mut Ui, id: &str, value: &mut String, placeholder: &str) -> bool {
     let edit = egui::TextEdit::singleline(value)
         .password(true)
         .font(egui::TextStyle::Monospace)
-        .hint_text(RichText::new(placeholder).color(theme::TEXT_MUTED).size(13.0))
+        .hint_text(
+            RichText::new(placeholder)
+                .color(theme::TEXT_MUTED)
+                .size(13.0),
+        )
         .id(Id::new(id))
         .vertical_align(Align::Center);
-    ui.add_sized(Vec2::new(ui.available_width().max(140.0), 32.0), edit)
+    ui.add_sized(Vec2::new(ui.available_width().max(140.0), 36.0), edit)
         .changed()
 }
 
@@ -269,6 +341,15 @@ pub fn parse_opt_int(buffer: &str) -> Option<i64> {
 
 /// Dropdown over a `Choice` list, with an optional "未设置" entry.
 /// `current` is the raw config value; an empty string means unset.
+fn choice_text(choice: &Choice) -> &str {
+    choice
+        .label
+        .strip_prefix(choice.value)
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .unwrap_or(choice.label)
+}
+
 pub fn choice_dropdown(
     ui: &mut Ui,
     id: &str,
@@ -279,7 +360,11 @@ pub fn choice_dropdown(
     let selected = if current.is_empty() {
         UNSET.to_string()
     } else {
-        choice_label(choices, current)
+        choices
+            .iter()
+            .find(|choice| choice.value == current)
+            .map(|choice| choice_text(choice).to_string())
+            .unwrap_or_else(|| current.clone())
     };
     let mut changed = false;
     egui::ComboBox::from_id_salt(Id::new(id))
@@ -288,9 +373,11 @@ pub fn choice_dropdown(
         .show_ui(ui, |ui| {
             if allow_unset {
                 let is_selected = current.is_empty();
-                let text = RichText::new(UNSET)
-                    .size(13.0)
-                    .color(if is_selected { theme::ACCENT_TEXT } else { theme::TEXT_DIM });
+                let text = RichText::new(UNSET).size(13.0).color(if is_selected {
+                    theme::ACCENT_TEXT
+                } else {
+                    theme::TEXT_DIM
+                });
                 if ui.selectable_label(is_selected, text).clicked() {
                     *current = String::new();
                     changed = true;
@@ -299,9 +386,13 @@ pub fn choice_dropdown(
             }
             for choice in choices {
                 let is_selected = current == choice.value;
-                let label = RichText::new(choice.label)
+                let label = RichText::new(choice_text(choice))
                     .size(13.0)
-                    .color(if is_selected { theme::ACCENT_TEXT } else { theme::TEXT });
+                    .color(if is_selected {
+                        theme::ACCENT_TEXT
+                    } else {
+                        theme::TEXT
+                    });
                 if ui
                     .selectable_label(is_selected, label)
                     .on_hover_text(choice.help)
@@ -315,12 +406,7 @@ pub fn choice_dropdown(
     if !current.is_empty() {
         let help = choice_help(choices, current);
         if !help.is_empty() {
-            ui.label(
-                RichText::new(help)
-                    .size(11.5)
-                    .color(theme::TEXT_MUTED)
-                    ,
-            );
+            ui.label(RichText::new(help).size(11.5).color(theme::TEXT_MUTED));
         }
     }
     changed
@@ -355,7 +441,11 @@ pub fn string_dropdown(
                         is_selected,
                         RichText::new(label.clone())
                             .size(13.0)
-                            .color(if is_selected { theme::ACCENT_TEXT } else { theme::TEXT }),
+                            .color(if is_selected {
+                                theme::ACCENT_TEXT
+                            } else {
+                                theme::TEXT
+                            }),
                     )
                     .clicked()
                 {
@@ -370,6 +460,23 @@ pub fn string_dropdown(
 /// Big three-way selector for the wire protocol.
 pub fn protocol_picker(ui: &mut Ui, current: &mut WireApi) -> bool {
     let mut changed = false;
+    if ui.available_width() < 580.0 {
+        for option in WireApi::ALL {
+            let selected = *current == option;
+            if ui
+                .add_sized(
+                    [ui.available_width(), 36.0],
+                    egui::Button::new(option.label()).selected(selected),
+                )
+                .on_hover_text(format!("{}\n{}", option.endpoint(), option.help()))
+                .clicked()
+            {
+                *current = option;
+                changed = true;
+            }
+        }
+        return changed;
+    }
     let width = ((ui.available_width() - 24.0) / 3.0).clamp(150.0, 280.0);
     ui.horizontal_top(|ui| {
         for option in WireApi::ALL {
@@ -389,12 +496,13 @@ pub fn protocol_picker(ui: &mut Ui, current: &mut WireApi) -> bool {
                     ui.vertical(|ui| {
                         wrap(ui);
                         ui.set_width(width - 24.0);
-                        ui.label(
-                            RichText::new(option.label())
-                                .size(13.5)
-                                .strong()
-                                .color(if selected { theme::ACCENT_TEXT } else { theme::TEXT }),
-                        );
+                        ui.label(RichText::new(option.label()).size(13.5).strong().color(
+                            if selected {
+                                theme::ACCENT_TEXT
+                            } else {
+                                theme::TEXT
+                            },
+                        ));
                         ui.label(
                             RichText::new(option.endpoint())
                                 .monospace()
@@ -402,14 +510,14 @@ pub fn protocol_picker(ui: &mut Ui, current: &mut WireApi) -> bool {
                                 .color(theme::TEXT_MUTED),
                         );
                         ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(option.help())
-                                .size(11.5)
-                                .color(if selected { theme::ACCENT_TEXT } else { theme::TEXT_DIM }),
-                        );
+                        ui.label(RichText::new(option.help()).size(11.5).color(if selected {
+                            theme::ACCENT_TEXT
+                        } else {
+                            theme::TEXT_DIM
+                        }));
                     });
                 })
-.response
+                .response
                 .interact(Sense::click());
             if response.clicked() && !selected {
                 *current = option;
@@ -431,9 +539,17 @@ pub fn chip_toggles(
         for (value, label, help) in options {
             let is_selected = selected.iter().any(|s| s == value);
             let (fill, stroke, fg) = if is_selected {
-                (theme::ACCENT_WEAK, Stroke::new(1.4, theme::ACCENT), theme::ACCENT_TEXT)
+                (
+                    theme::ACCENT_WEAK,
+                    Stroke::new(1.4, theme::ACCENT),
+                    theme::ACCENT_TEXT,
+                )
             } else {
-                (theme::INPUT_BG, Stroke::new(1.0, theme::BORDER), theme::TEXT_DIM)
+                (
+                    theme::INPUT_BG,
+                    Stroke::new(1.0, theme::BORDER),
+                    theme::TEXT_DIM,
+                )
             };
             let text = if is_selected {
                 format!("{} {label}", icons::CHECK)
@@ -478,14 +594,14 @@ pub fn kv_editor(
     for (index, entry) in entries.iter_mut().enumerate() {
         ui.horizontal(|ui| {
             let key_resp = ui.add_sized(
-                Vec2::new(190.0, 30.0),
+                Vec2::new(190.0, 34.0),
                 egui::TextEdit::singleline(&mut entry.0)
                     .hint_text(key_hint)
                     .font(egui::TextStyle::Monospace)
                     .id(Id::new((id, "k", index))),
             );
             let value_resp = ui.add_sized(
-                Vec2::new((ui.available_width() - 40.0).max(120.0), 30.0),
+                Vec2::new((ui.available_width() - 40.0).max(120.0), 34.0),
                 egui::TextEdit::singleline(&mut entry.1)
                     .hint_text(value_hint)
                     .font(egui::TextStyle::Monospace)
@@ -515,11 +631,16 @@ pub fn kv_editor(
 // ---------------------------------------------------------------------------
 
 pub fn primary_button(ui: &mut Ui, text: &str) -> egui::Response {
-    let button = egui::Button::new(RichText::new(text).size(13.5).strong().color(Color32::WHITE))
-        .fill(theme::ACCENT)
-        .stroke(Stroke::NONE)
-        .corner_radius(CornerRadius::same(8))
-        .min_size(Vec2::new(0.0, 32.0));
+    let button = egui::Button::new(
+        RichText::new(text)
+            .size(14.0)
+            .strong()
+            .color(Color32::WHITE),
+    )
+    .fill(theme::ACCENT)
+    .stroke(Stroke::NONE)
+    .corner_radius(CornerRadius::same(10))
+    .min_size(Vec2::new(0.0, 36.0));
     ui.add(button)
 }
 
@@ -527,8 +648,8 @@ pub fn ghost_button(ui: &mut Ui, text: &str) -> egui::Response {
     let button = egui::Button::new(RichText::new(text).size(13.0).color(theme::TEXT))
         .fill(theme::CARD_ALT)
         .stroke(Stroke::new(1.0, theme::BORDER))
-        .corner_radius(CornerRadius::same(8))
-        .min_size(Vec2::new(0.0, 30.0));
+        .corner_radius(CornerRadius::same(10))
+        .min_size(Vec2::new(0.0, 34.0));
     ui.add(button)
 }
 
@@ -536,8 +657,8 @@ pub fn danger_button(ui: &mut Ui, text: &str) -> egui::Response {
     let button = egui::Button::new(RichText::new(text).size(13.0).strong().color(theme::DANGER))
         .fill(theme::DANGER_WEAK)
         .stroke(Stroke::new(1.0, theme::DANGER.gamma_multiply(0.5)))
-        .corner_radius(CornerRadius::same(8))
-        .min_size(Vec2::new(0.0, 30.0));
+        .corner_radius(CornerRadius::same(10))
+        .min_size(Vec2::new(0.0, 34.0));
     ui.add(button)
 }
 
@@ -560,9 +681,16 @@ pub fn icon_button(ui: &mut Ui, icon: &str, color: Color32, tooltip: &str) -> eg
 }
 
 /// A full width frame that behaves like a button; used in list rows.
-pub fn clickable_frame<R>(ui: &mut Ui, selected: bool, add: impl FnOnce(&mut Ui) -> R) -> (egui::Response, R) {
+pub fn clickable_frame<R>(
+    ui: &mut Ui,
+    selected: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> (egui::Response, R) {
     let (fill, stroke) = if selected {
-        (theme::ACCENT_WEAK, Stroke::new(1.2, theme::ACCENT.gamma_multiply(0.7)))
+        (
+            theme::ACCENT_WEAK,
+            Stroke::new(1.2, theme::ACCENT.gamma_multiply(0.7)),
+        )
     } else {
         (theme::INPUT_BG, Stroke::new(1.0, theme::BORDER))
     };
@@ -586,7 +714,8 @@ pub fn empty_state(ui: &mut Ui, icon: &str, title: &str, body: &str) {
     ui.vertical_centered(|ui| {
         wrap(ui);
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(58.0), Sense::hover());
-        ui.painter().circle_filled(rect.center(), 29.0, theme::ACCENT.gamma_multiply(0.14));
+        ui.painter()
+            .circle_filled(rect.center(), 29.0, theme::ACCENT.gamma_multiply(0.14));
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -598,21 +727,20 @@ pub fn empty_state(ui: &mut Ui, icon: &str, title: &str, body: &str) {
         ui.label(RichText::new(title).size(17.0).strong().color(theme::TEXT));
         ui.add_space(4.0);
         ui.set_max_width(520.0);
-        ui.label(
-            RichText::new(body)
-                .size(13.0)
-                .color(theme::TEXT_DIM)
-                ,
-        );
+        ui.label(RichText::new(body).size(13.0).color(theme::TEXT_DIM));
     });
     ui.add_space(14.0);
 }
 
 pub fn search_field(ui: &mut Ui, query: &mut String) -> bool {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(icons::SEARCH).size(15.0).color(theme::TEXT_MUTED));
+        ui.label(
+            RichText::new(icons::SEARCH)
+                .size(15.0)
+                .color(theme::TEXT_MUTED),
+        );
         ui.add_sized(
-            Vec2::new(ui.available_width().max(160.0), 32.0),
+            Vec2::new(ui.available_width().max(160.0), 36.0),
             egui::TextEdit::singleline(query)
                 .hint_text(RichText::new("搜索…").color(theme::TEXT_MUTED).size(13.0))
                 .id(Id::new("search-box")),
@@ -623,11 +751,17 @@ pub fn search_field(ui: &mut Ui, query: &mut String) -> bool {
 }
 
 /// Simple centred modal dialog. Returns the closure result while open.
-pub fn modal<R>(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+pub fn modal<R>(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    width: f32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
     let mut result = None;
     egui::Modal::new(Id::new(id)).show(ctx, |ui| {
         wrap(ui);
-        ui.set_width(width);
+        ui.set_width(width.min((ctx.content_rect().width() - 64.0).max(240.0)));
         ui.label(RichText::new(title).size(17.0).strong().color(theme::TEXT));
         ui.add_space(6.0);
         ui.separator();
@@ -652,11 +786,23 @@ pub fn tri_state(ui: &mut Ui, _id: &str, value: &mut Option<bool>) -> bool {
             let (fill, stroke, fg) = if selected {
                 match option {
                     Some(true) => (theme::OK_WEAK, Stroke::new(1.2, theme::OK), theme::OK),
-                    Some(false) => (theme::DANGER_WEAK, Stroke::new(1.2, theme::DANGER.gamma_multiply(0.7)), theme::DANGER),
-                    None => (theme::CARD_ALT, Stroke::new(1.2, theme::BORDER_STRONG), theme::TEXT),
+                    Some(false) => (
+                        theme::DANGER_WEAK,
+                        Stroke::new(1.2, theme::DANGER.gamma_multiply(0.7)),
+                        theme::DANGER,
+                    ),
+                    None => (
+                        theme::CARD_ALT,
+                        Stroke::new(1.2, theme::BORDER_STRONG),
+                        theme::TEXT,
+                    ),
                 }
             } else {
-                (theme::INPUT_BG, Stroke::new(1.0, theme::BORDER), theme::TEXT_MUTED)
+                (
+                    theme::INPUT_BG,
+                    Stroke::new(1.0, theme::BORDER),
+                    theme::TEXT_MUTED,
+                )
             };
             let frame = egui::Frame::new()
                 .fill(fill)
