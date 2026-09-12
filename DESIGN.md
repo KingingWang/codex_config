@@ -3,10 +3,11 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-09-12
+- Last refreshed: 2026-09-13
 - Primary product surfaces: Chinese-first Rust / egui desktop configuration assistant.
 - Evidence reviewed: README.md, src/app.rs, src/page.rs, src/ui/, src/dialogs.rs, tests/gui.rs, assets/icon/.
 - Observed: the user explicitly rejects the green light theme and requests remote SSH targets with an SSH-config alias dropdown.
+- Observed: after reviewing actual page renders, the user requests a complete visual polish. Existing safety and editing behavior remain in scope.
 - Assumption: retain the native application; remote targets run Linux/macOS with Python 3 and use existing SSH key/agent authentication.
 
 ## Brand
@@ -41,13 +42,16 @@
 - Chinese task labels first, raw field keys in tooltips.
 - Never change settings merely by visiting a page.
 - Tradeoffs: readable forms over displaying every field at once; preserve expert tools.
+- Art direction: a precise graphite studio. Quiet surfaces, strong alignment, a distinctive blue workspace accent, compact status labels and generous space around the primary task.
+- Returning users see their workspace, not a repeated onboarding billboard. First-time users retain an explicit service-provider entry point.
+- List selection means editing; the labelled “使用中” state means active configuration. Never conflate either with verified network connectivity.
 
 ## Visual language
 
-- Color: charcoal canvas #111318, sidebar #15181E, raised surfaces #1C2028, inputs #12151B, borders #303744; off-white text #E7EBF2 and muted #9BA6B8. Restrained blue #719DF4 for emphasis; green only for semantic success.
+- Color: charcoal canvas #111318, sidebar #14171D, raised surfaces #1A1E26, inputs #12151B, borders #2B323E; off-white text #E7EBF2 and muted #9BA6B8. Restrained blue #719DF4 for emphasis; green only for semantic success.
 - Typography: CJK-capable native fonts; 26–30 pt headings, 14–15 pt body, 12–13 pt metadata; monospace for code only.
-- Spacing/layout rhythm: 8 pt rhythm, 20–24 pt card padding, 16–24 pt gaps.
-- Shape/radius/elevation: 12–16 pt rounded cards, fine borders, restrained shadows.
+- Spacing/layout rhythm: 8 pt rhythm, 20 pt card padding, 16–24 pt section gaps; compact 22 pt read-only badges must not inherit button minimum height.
+- Shape/radius/elevation: 12 pt content cards, 8 pt controls; subtle surface boundaries, strong borders reserved for focused inputs and selected rows. Avoid nested ornamental frames and repeated separators.
 - Motion: native hover/focus feedback, no perpetual ornamental animation.
 - Imagery/iconography: existing Phosphor glyphs and native geometric motifs; no remote assets.
 
@@ -57,6 +61,7 @@
 - New/changed components: compact workspace summary, environment switcher, SSH alias dropdown and progress/error states, grouped sidebar, target-aware save/status bar.
 - Variants and states: primary/secondary/danger actions, labelled statuses, visible keyboard focus.
 - Token/component ownership: src/ui/theme.rs and src/ui/widgets.rs; no parallel design system.
+- Source editor: reuse the existing dependency's cached TOML highlighter and native TextEdit; JSON stays plain text with format/validation tools. No custom lexer or new syntax dependency.
 
 ## Accessibility
 
@@ -70,6 +75,8 @@
 
 - Supported breakpoints/devices: desktop minimum 1000×660, normal 1360×880, large 1440×940.
 - Layout adaptations: narrow fields stack; flexible split views; scroll every long form.
+- Home uses two columns at 900 pt of content width; the sidebar switches to compact spacing below 760 pt of window height, keeping all six destinations visible at 1000×660.
+- Management toolbars wrap and measure remaining height after rendering. Long names/paths truncate with full text available on hover; narrow profile actions wrap separately from summaries.
 - Touch/hover differences: 32–36 pt targets where practical; essential guidance not tooltip-only.
 
 ## Interaction states
@@ -98,12 +105,20 @@
 
 ## Implementation and verification plan
 
-1. Run existing fixture-based baseline tests.
-2. Update shared dark tokens, home and shell; add environment-aware remote snapshot loading/saving without weakening local persistence.
-3. Test SSH alias parsing, remote helper read/save/conflict/backup boundaries and GUI target switching in disposable directories; never connect to real hosts or modify personal configuration in tests.
-4. Run formatting, compilation, Clippy and tests; inspect actual screenshots and smoke-run the binary.
+1. Run existing fixture-based GUI tests before visual edits; preserve navigation, save/discard, permissions, raw-draft and remote-operation safeguards.
+2. Refine shared tokens/components and the application shell, then replace the returning-user welcome billboard with an accurate compact workspace summary.
+3. Simplify model/provider lists, profile cards and source-editor chrome in disjoint implementation lanes. Reuse current state/actions, without adding dependencies or changing persistence/network code.
+4. Add layout/state regression checks for compact badges, first-screen content, long labels, small windows and browsing without mutations.
+5. Run formatting, compilation, Clippy and the full tests; review fresh normal/compact/empty/error screenshots and smoke-run the native binary using disposable fixtures only.
 
 ## Open questions
 
 - [ ] Password-only SSH and remote Windows hosts are not supported in this iteration.
 - [ ] Windows/macOS visual review requires those environments; current verification uses Linux.
+
+## Visual verification evidence
+
+- Fresh fixture renders: `screenshots/page-*.png`, `screenshots/compact-*.png`, `screenshots/workspace-standard.png`.
+- Edge-state renders: first launch, malformed configuration, long Unicode names/paths, long SSH aliases and recoverable source errors.
+- Native Linux launch: `screenshots/native-desktop.png`, captured by `tools/smoke_desktop.py` on a virtual display using a disposable fixture home.
+- Behavior gates: page browsing never mutates configuration; selection and activation remain separate; Unicode editing, keyboard navigation, explicit save, backups and remote boundaries retain regression coverage.

@@ -41,48 +41,41 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         )
     };
 
-    widgets::section(ui, icons::PROFILES, "配置档是什么？", "", |ui| {
-        widgets::hint(
-            ui,
-            "一个配置档 = 一组「模型 + 服务商 + 权限」的预设。比如你可以建一个 work（公司代理 + 严格权限）\n和一个 play（本地 Ollama + 完全放开），需要时在下面一键切换，或者用 codex --profile work 启动。\n切换配置档只是把 profile = \"名字\" 写进 config.toml，不会动你的其它设置。",
-        );
-    });
-    ui.add_space(8.0);
+    widgets::hint(
+        ui,
+        "把常用的模型、服务商和权限存成一组。也可用 codex --profile <名字> 启动。",
+    );
+    ui.add_space(6.0);
 
-    // create new
-    widgets::card(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            let mut buffer = app.dialog_buffer2.clone();
-            if widgets::text_field_w(
-                ui,
-                "new-profile-name",
-                &mut buffer,
-                "新配置档的名字，例如 work",
-                280.0,
-            ) {
-                app.dialog_buffer2 = buffer.clone();
-            }
-            let name = buffer.trim().to_string();
-            let taken = names.contains(&name);
-            ui.add_enabled_ui(!name.is_empty() && !taken, |ui| {
-                if widgets::primary_button(ui, &format!("{} 新建配置档", icons::ADD)).clicked()
-                {
-                    if let Some(doc) = &mut app.doc {
-                        doc.config.ensure_table_at(&["profiles", &name]);
-                    }
-                    app.dialog_buffer2.clear();
-                    app.editing_profile = None;
-                    app.select_profile(&name);
-                    app.toast_info(format!("已创建配置档 {name}，在下面填内容"));
+    ui.horizontal_wrapped(|ui| {
+        let mut buffer = app.dialog_buffer2.clone();
+        if widgets::text_field_w(
+            ui,
+            "new-profile-name",
+            &mut buffer,
+            "新配置档的名字，例如 work",
+            280.0,
+        ) {
+            app.dialog_buffer2 = buffer.clone();
+        }
+        let name = buffer.trim().to_string();
+        let taken = names.contains(&name);
+        ui.add_enabled_ui(!name.is_empty() && !taken, |ui| {
+            if widgets::primary_button(ui, &format!("{} 新建配置档", icons::ADD)).clicked() {
+                if let Some(doc) = &mut app.doc {
+                    doc.config.ensure_table_at(&["profiles", &name]);
                 }
-            });
-            if taken {
-                widgets::note(ui, "这个名字已经有了。", theme::WARN);
+                app.dialog_buffer2.clear();
+                app.editing_profile = None;
+                app.select_profile(&name);
+                app.toast_info(format!("已创建配置档 {name}，在下面填内容"));
             }
         });
+        if taken {
+            widgets::note(ui, "这个名字已经有了。", theme::WARN);
+        }
     });
-    ui.add_space(8.0);
+    ui.add_space(10.0);
 
     if names.is_empty() {
         widgets::card(ui, |ui| {
@@ -105,13 +98,30 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
 
         widgets::card(ui, |ui| {
             ui.set_width(ui.available_width());
+
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("{}  {name}", icons::PROFILES))
+                    RichText::new(icons::PROFILES)
                         .size(15.0)
                         .strong()
                         .color(theme::TEXT),
                 );
+
+                let name_width = (ui.available_width() - 120.0).max(80.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(name_width, 24.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&name).size(15.0).strong().color(theme::TEXT),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&name);
+                    },
+                );
+
                 if is_active {
                     widgets::badge(
                         ui,
@@ -120,42 +130,51 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
                         theme::OK_WEAK,
                     );
                 }
-                ui.label(RichText::new(summary).size(12.0).color(theme::TEXT_DIM));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::danger_button(ui, "删除").clicked() {
-                        app.dialog = Some(Dialog::DeleteProfile(name_for_actions.clone()));
-                    }
-                    if !is_active && widgets::primary_button(ui, "启用这个配置档").clicked()
-                    {
-                        if let Some(doc) = &mut app.doc {
-                            doc.config.set_value_at(
-                                &["profile"],
-                                TomlValue::from(name_for_actions.clone()),
-                            );
-                        }
-                        app.toast_info(format!("已切换到配置档 {name_for_actions}"));
-                    }
-                    if is_active && widgets::ghost_button(ui, "停止使用配置档").clicked() {
-                        if let Some(doc) = &mut app.doc {
-                            doc.config.remove_at(&["profile"]);
-                        }
-                        app.toast_info("已恢复使用全局默认设置");
-                    }
-                });
             });
-            let toggle_label = if selected {
-                format!("{} 收起", icons::CARET_DOWN)
-            } else {
-                format!("{} 编辑内容", icons::CARET_RIGHT)
-            };
-            if widgets::ghost_button(ui, &toggle_label).clicked() {
-                if selected {
-                    app.editing_profile = None;
-                    app.profile_editor = None;
-                } else {
-                    app.select_profile(&name);
-                }
+
+            if !summary.is_empty() {
+                ui.add(
+                    egui::Label::new(RichText::new(&summary).size(12.0).color(theme::TEXT_DIM))
+                        .truncate(),
+                )
+                .on_hover_text(&summary);
             }
+
+            ui.add_space(4.0);
+
+            ui.horizontal_wrapped(|ui| {
+                let toggle_label = if selected {
+                    format!("{} 收起", icons::CARET_DOWN)
+                } else {
+                    format!("{} 编辑内容", icons::CARET_RIGHT)
+                };
+                if widgets::ghost_button(ui, &toggle_label).clicked() {
+                    if selected {
+                        app.editing_profile = None;
+                        app.profile_editor = None;
+                    } else {
+                        app.select_profile(&name);
+                    }
+                }
+
+                if !is_active && widgets::link_button(ui, "启用这个配置档", theme::ACCENT).clicked()
+                {
+                    if let Some(doc) = &mut app.doc {
+                        doc.config
+                            .set_value_at(&["profile"], TomlValue::from(name_for_actions.clone()));
+                    }
+                    app.toast_info(format!("已切换到配置档 {name_for_actions}"));
+                }
+                if is_active && widgets::ghost_button(ui, "停止使用配置档").clicked() {
+                    if let Some(doc) = &mut app.doc {
+                        doc.config.remove_at(&["profile"]);
+                    }
+                    app.toast_info("已恢复使用全局默认设置");
+                }
+                if widgets::link_button(ui, "删除", theme::DANGER).clicked() {
+                    app.dialog = Some(Dialog::DeleteProfile(name_for_actions.clone()));
+                }
+            });
         });
 
         if selected {

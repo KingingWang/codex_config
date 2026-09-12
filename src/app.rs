@@ -721,12 +721,14 @@ impl eframe::App for App {
                     self.error_page(ui);
                     return;
                 }
-                widgets::page_header(
-                    ui,
-                    self.page.icon(),
-                    self.page.title(),
-                    self.page.subtitle(),
-                );
+                if self.page != Page::Overview {
+                    widgets::page_header(
+                        ui,
+                        self.page.icon(),
+                        self.page.title(),
+                        self.page.subtitle(),
+                    );
+                }
                 if self.is_remote() {
                     widgets::hint(
                         ui,
@@ -814,24 +816,48 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(theme::PANEL)
-                    .inner_margin(Margin::symmetric(24, 14))
-                    .stroke(Stroke::new(1.0, theme::BORDER)),
+                    .inner_margin(Margin::symmetric(24, 10)),
             )
             .show(root, |ui| {
                 if self.ssh_busy() {
                     ui.disable();
                 }
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("我的工作空间")
-                            .size(12.5)
-                            .color(theme::TEXT_MUTED),
-                    );
-                    ui.label(RichText::new("/").color(theme::BORDER_STRONG));
-                    ui.label(
-                        RichText::new(self.target_label())
-                            .size(12.5)
-                            .color(theme::TEXT),
+                    let target_width = (ui.available_width() - 320.0).max(120.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(target_width, 36.0),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            if self.has_unsaved_changes() && target_width > 260.0 {
+                                widgets::badge(
+                                    ui,
+                                    if self.has_raw_draft() {
+                                        "草稿未应用"
+                                    } else {
+                                        "未保存"
+                                    },
+                                    theme::WARN,
+                                    theme::WARN_WEAK,
+                                );
+                            }
+                            ui.label(
+                                RichText::new(if self.is_remote() {
+                                    icons::SERVER
+                                } else {
+                                    icons::TERMINAL
+                                })
+                                .size(17.0)
+                                .color(theme::TEXT_MUTED),
+                            );
+                            let target = self.target_label();
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&target).size(12.5).color(theme::TEXT_DIM),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&target);
+                        },
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let dirty = self.has_unsaved_changes();
@@ -842,7 +868,10 @@ impl App {
                                 "Ctrl+S"
                             };
                             if widgets::primary_button(ui, "保存配置")
-                                .on_hover_text(format!("写入前自动备份 · {shortcut}"))
+                                .on_hover_text(format!(
+                                    "保存到 {} · 写入前自动备份 · {shortcut}",
+                                    self.target_label()
+                                ))
                                 .clicked()
                             {
                                 self.save();
@@ -864,8 +893,7 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(theme::PANEL)
-                    .inner_margin(Margin::symmetric(24, 10))
-                    .stroke(Stroke::new(1.0, theme::BORDER)),
+                    .inner_margin(Margin::symmetric(24, 4)),
             )
             .show(root, |ui| {
                 if self.ssh_busy() {
@@ -887,7 +915,9 @@ impl App {
                     } else {
                         ("已与本地文件同步", theme::TEXT_DIM)
                     };
-                    ui.label(RichText::new(icons::SHIELD).size(16.0).color(color));
+                    let (dot, _) =
+                        ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                    ui.painter().circle_filled(dot.center(), 3.0, color);
                     ui.label(RichText::new(text).size(12.0).color(color));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if self.is_remote() {
@@ -913,6 +943,7 @@ impl App {
     }
 
     fn sidebar(&mut self, root: &mut Ui) {
+        let compact = root.available_height() < 760.0;
         egui::Panel::left("sidebar")
             .exact_size(208.0)
             .resizable(false)
@@ -920,7 +951,7 @@ impl App {
                 egui::Frame::new()
                     .fill(theme::PANEL)
                     .inner_margin(Margin::symmetric(16, 24))
-                    .stroke(Stroke::new(1.0, theme::BORDER)),
+                    .stroke(Stroke::NONE),
             )
             .show(root, |ui| {
                 if self.ssh_busy() {
@@ -928,17 +959,19 @@ impl App {
                 }
                 ScrollArea::vertical()
                     .id_salt("sidebar-navigation")
-                    .max_height((ui.available_height() - 132.0).max(160.0))
+                    .max_height(
+                        (ui.available_height() - if compact { 112.0 } else { 132.0 }).max(160.0),
+                    )
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 4.0;
                         ui.horizontal(|ui| {
-                            widgets::icon_tile(ui, icons::BRAND, 36.0, 24.0, theme::ACCENT);
+                            widgets::icon_tile(ui, icons::BRAND, 38.0, 25.0, theme::ACCENT);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 ui.label(
                                     RichText::new("Codex")
-                                        .size(23.0)
+                                        .size(22.0)
                                         .strong()
                                         .color(theme::TEXT),
                                 );
@@ -947,26 +980,35 @@ impl App {
                                 );
                             });
                         });
-                        ui.add_space(20.0);
-                        theme::subtle_frame().show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.label(
-                                RichText::new("当前环境")
-                                    .size(10.5)
-                                    .color(theme::TEXT_MUTED),
-                            );
-                            ui.label(
-                                RichText::new(self.target_label())
-                                    .size(13.0)
-                                    .strong()
-                                    .color(theme::TEXT),
-                            );
-                            if widgets::link_button(ui, "切换环境…", theme::ACCENT).clicked()
-                            {
-                                self.open_environment();
-                            }
-                        });
-                        ui.add_space(18.0);
+                        ui.add_space(if compact { 12.0 } else { 26.0 });
+                        theme::subtle_frame()
+                            .inner_margin(Margin::same(if compact { 10 } else { 14 }))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                if !compact {
+                                    ui.label(
+                                        RichText::new("当前环境")
+                                            .size(10.5)
+                                            .color(theme::TEXT_MUTED),
+                                    );
+                                }
+                                let target = self.target_label();
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&target)
+                                            .size(13.0)
+                                            .strong()
+                                            .color(theme::TEXT),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(&target);
+                                if widgets::link_button(ui, "切换环境…", theme::ACCENT).clicked()
+                                {
+                                    self.open_environment();
+                                }
+                            });
+                        ui.add_space(if compact { 12.0 } else { 24.0 });
                         ui.label(
                             RichText::new("日常使用")
                                 .size(11.0)
@@ -976,7 +1018,7 @@ impl App {
                         let counts = self.sidebar_counts();
                         for page in Page::ALL {
                             if page == Page::Profiles {
-                                ui.add_space(16.0);
+                                ui.add_space(if compact { 12.0 } else { 24.0 });
                                 ui.label(
                                     RichText::new("进阶工具")
                                         .size(11.0)
@@ -990,6 +1032,7 @@ impl App {
                                 page,
                                 selected,
                                 counts.get(&page).copied().flatten(),
+                                compact,
                             ) {
                                 self.page = page;
                             }
@@ -1033,29 +1076,63 @@ impl App {
 
     /// One navigation row: an accent bar on the left when selected, an icon,
     /// the page name and an optional count badge. Returns true when clicked.
-    fn nav_item(&self, ui: &mut Ui, page: Page, selected: bool, count: Option<usize>) -> bool {
+    fn nav_item(
+        &self,
+        ui: &mut Ui,
+        page: Page,
+        selected: bool,
+        count: Option<usize>,
+        compact: bool,
+    ) -> bool {
         let color = if selected {
             theme::ACCENT
         } else {
             theme::TEXT_DIM
         };
         let response = ui.add_sized(
-            [ui.available_width(), 36.0],
-            egui::Button::new(RichText::new(page.title()).size(13.5).color(color))
+            [ui.available_width(), if compact { 34.0 } else { 38.0 }],
+            egui::Button::new("")
                 .fill(if selected {
                     theme::ACCENT_WEAK
                 } else {
                     Color32::TRANSPARENT
                 })
                 .stroke(Stroke::NONE)
-                .corner_radius(CornerRadius::same(10))
+                .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
                 .selected(selected),
         );
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                selected,
+                page.title(),
+            )
+        });
+        if response.hovered() && !selected {
+            ui.painter()
+                .rect_filled(response.rect, theme::CONTROL_RADIUS, theme::CARD_ALT);
+        }
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                response.rect,
+                theme::CONTROL_RADIUS,
+                Stroke::new(1.5, theme::ACCENT_HI),
+                egui::StrokeKind::Inside,
+            );
+        }
         ui.painter().text(
             egui::pos2(response.rect.left() + 18.0, response.rect.center().y),
             egui::Align2::CENTER_CENTER,
             page.icon(),
             egui::FontId::proportional(18.0),
+            color,
+        );
+        ui.painter().text(
+            egui::pos2(response.rect.left() + 40.0, response.rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            page.title(),
+            egui::FontId::proportional(13.5),
             color,
         );
         if let Some(count) = count {

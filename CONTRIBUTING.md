@@ -156,8 +156,8 @@ Linux 的构建和离屏渲染依赖见 [README](README.md#linux-构建依赖)�
 维护者专属。推送 `v` 开头的标签即可触发自动发布：
 
 ```bash
-git tag -a v0.4.0 -m "Release v0.4.0"
-git push origin v0.4.0
+git tag -a v0.5.0 -m "Release v0.5.0"
+git push origin v0.5.0
 ```
 
 ## 行为准则

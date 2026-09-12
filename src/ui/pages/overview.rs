@@ -40,7 +40,7 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         ui.add_space(12.0);
     }
     ui.add_enabled_ui(profile.is_empty(), |ui| {
-        if ui.available_width() >= 1000.0 {
+        if ui.available_width() >= 900.0 {
             ui.columns(2, |columns| {
                 active_model_card(app, &mut columns[0]);
                 safety_card(app, &mut columns[1]);
@@ -50,14 +50,14 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
             safety_card(app, ui);
         }
     });
-    ui.add_space(12.0);
-    widgets::card(ui, |ui| {
+    ui.add_space(8.0);
+    ui.scope(|ui| {
         ui.set_width(ui.available_width());
+        ui.separator();
         egui::CollapsingHeader::new("更多偏好设置").show(ui, |ui| {
             preferences(app, ui);
             output_card(app, ui);
         });
-        ui.separator();
         let issues = app.issues();
         let attention = issues
             .iter()
@@ -66,10 +66,9 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         egui::CollapsingHeader::new(format!("配置检查 · {attention} 项需要留意"))
             .id_salt("overview-health")
             .show(ui, |ui| health_card(app, ui));
-        ui.separator();
         egui::CollapsingHeader::new("文件与配置目录").show(ui, |ui| files_card(app, ui));
     });
-    ui.add_space(16.0);
+    ui.add_space(8.0);
     widgets::hint(
         ui,
         "所有修改只在点击「保存配置」后写入当前环境的文件。保存前会自动备份。",
@@ -79,6 +78,9 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
 fn welcome(app: &mut App, ui: &mut Ui) {
     let Some(doc) = &app.doc else { return };
     let has_custom = !doc.provider_ids().is_empty();
+    let home = doc.codex_home.display().to_string();
+    let model_count = doc.catalog.as_ref().map(catalog::model_count).unwrap_or(0);
+    let provider_count = doc.provider_ids().len();
     let issues = app.issues();
     let repair = issues
         .iter()
@@ -90,50 +92,130 @@ fn welcome(app: &mut App, ui: &mut Ui) {
     } else {
         ("管理我的模型", Page::Models)
     };
-    egui::Frame::new()
-        .fill(theme::CARD)
-        .stroke(egui::Stroke::new(1.0, theme::BORDER))
-        .corner_radius(egui::CornerRadius::same(14))
-        .inner_margin(egui::Margin::same(22))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            ui.set_width(ui.available_width());
-            ui.label(
-                RichText::new("WORKSPACE / CONFIGURATION")
-                    .size(11.0)
-                    .strong()
-                    .color(theme::TEXT_MUTED),
-            );
-            ui.add_space(7.0);
-            ui.label(
-                RichText::new("你的环境，由你设定。")
-                    .size(27.0)
-                    .strong()
-                    .color(theme::TEXT),
-            );
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(if has_custom {
-                    "在本机与远程机器之间切换，统一管理模型、服务商和使用权限。"
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.label(RichText::new("WORKSPACE").size(11.0).color(theme::ACCENT));
+        ui.label(
+            RichText::new(if has_custom {
+                "你的 AI 工作空间"
+            } else {
+                "从这里，开启你的工作空间"
+            })
+            .size(30.0)
+            .strong()
+            .color(theme::TEXT),
+        );
+        ui.label(
+            RichText::new(if has_custom {
+                "模型、权限与偏好。让工具顺应你的工作方式。"
+            } else {
+                "连接服务商，选择模型，再保存你的第一份配置。"
+            })
+            .size(13.0)
+            .color(theme::TEXT_MUTED),
+        );
+    });
+    ui.add_space(12.0);
+    let mut frame = theme::card_frame()
+        .inner_margin(egui::Margin::same(16))
+        .begin(ui);
+    {
+        let ui = &mut frame.content_ui;
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            widgets::icon_tile(
+                ui,
+                if app.is_remote() {
+                    icons::SERVER
                 } else {
-                    "从选择环境开始，再配置服务商和模型。修改会保留在编辑器中，直到你点击保存。"
-                })
-                .size(13.5)
-                .color(theme::TEXT_DIM),
+                    icons::TERMINAL
+                },
+                40.0,
+                23.0,
+                theme::ACCENT,
             );
-            ui.add_space(14.0);
-            ui.horizontal_wrapped(|ui| {
-                if widgets::primary_button(ui, action).clicked() {
+            ui.add_space(6.0);
+            let summary_width = (ui.available_width() - 172.0).max(160.0);
+            ui.vertical(|ui| {
+                ui.set_width(summary_width);
+                ui.spacing_mut().item_spacing.y = 5.0;
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(app.target_label())
+                            .size(17.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(app.target_label());
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&home)
+                            .monospace()
+                            .size(12.0)
+                            .color(theme::TEXT_MUTED),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&home);
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let response = if has_custom && repair.is_none() {
+                    widgets::ghost_button(ui, action)
+                } else {
+                    widgets::primary_button(ui, action)
+                };
+                if response.clicked() {
                     app.page = destination;
                 }
-                ui.add_space(12.0);
-                ui.label(
-                    RichText::new("01  连接服务   /   02  选择模型   /   03  保存使用")
-                        .size(12.0)
-                        .color(theme::TEXT_MUTED),
-                );
             });
         });
+        ui.add_space(4.0);
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 22.0;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                let catalog_label = if model_count == 0 {
+                    "内置模型目录".to_owned()
+                } else {
+                    format!("{model_count} 个自定义模型")
+                };
+                widgets::hint(
+                    ui,
+                    &format!("{catalog_label}    /    {provider_count} 个服务商"),
+                );
+                ui.add_space(12.0);
+                let attention = issues
+                    .iter()
+                    .filter(|issue| issue.severity != Severity::Info)
+                    .count();
+                if attention > 0 {
+                    widgets::badge(
+                        ui,
+                        &format!("{attention} 项配置需留意"),
+                        theme::WARN,
+                        theme::WARN_WEAK,
+                    );
+                } else {
+                    widgets::hint(ui, "配置检查无异常");
+                }
+                if app.is_remote() {
+                    widgets::hint(ui, "远程快照 · 非实时同步");
+                }
+            });
+        });
+    }
+    frame.frame.stroke = egui::Stroke::new(1.0, theme::BORDER_STRONG.gamma_multiply(0.65));
+    let response = frame.end(ui);
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            response.rect.left_top() + egui::vec2(0.0, 20.0),
+            egui::vec2(3.0, response.rect.height() - 40.0),
+        ),
+        2,
+        theme::ACCENT,
+    );
 }
 
 fn active_model_card(app: &mut App, ui: &mut Ui) {
@@ -196,7 +278,7 @@ fn active_model_card(app: &mut App, ui: &mut Ui) {
                     &["model"],
                     model_options,
                     "当前模型",
-                    "Codex 启动时默认使用的模型。列表来自你的模型目录文件。",
+                    "启动时默认使用的模型。",
                     "（还没选）",
                 );
             }
@@ -207,7 +289,7 @@ fn active_model_card(app: &mut App, ui: &mut Ui) {
                 &["model_provider"],
                 provider_options,
                 "当前服务商",
-                "模型请求发到哪个服务商。留空表示用 Codex 内置的默认服务商。",
+                "请求发送到这里；留空使用内置服务商。",
                 "（使用内置默认）",
             );
 
@@ -217,11 +299,10 @@ fn active_model_card(app: &mut App, ui: &mut Ui) {
                 &["model_reasoning_effort"],
                 REASONING_EFFORTS,
                 "思考深度",
-                "日常选中等；复杂任务选高。越深入，等待时间可能越长。",
+                "越深入，等待时间可能越长。",
             );
         },
     );
-    ui.add_space(12.0);
 }
 
 fn preferences(app: &mut App, ui: &mut Ui) {
@@ -303,9 +384,9 @@ fn safety_card(app: &mut App, ui: &mut Ui) {
             ] {
                 let selected = mode == value && approval == "on-request";
                 let response = ui.add_sized(
-                    [ui.available_width(), 44.0],
+                    [ui.available_width(), 42.0],
                     egui::Button::new(RichText::new(title).size(14.0).color(if selected {
-                        theme::ACCENT
+                        theme::ACCENT_TEXT
                     } else {
                         theme::TEXT
                     }))
@@ -324,6 +405,15 @@ fn safety_card(app: &mut App, ui: &mut Ui) {
                         },
                     )),
                 );
+                if selected {
+                    ui.painter().text(
+                        response.rect.right_center() - egui::vec2(18.0, 0.0),
+                        egui::Align2::CENTER_CENTER,
+                        icons::CHECK,
+                        egui::FontId::proportional(18.0),
+                        theme::ACCENT,
+                    );
+                }
                 if response.clicked()
                     && let Some(doc) = &mut app.doc
                 {
@@ -372,7 +462,6 @@ fn safety_card(app: &mut App, ui: &mut Ui) {
             }
         },
     );
-    ui.add_space(6.0);
 }
 
 fn files_card(app: &mut App, ui: &mut Ui) {

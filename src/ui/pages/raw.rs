@@ -1,6 +1,6 @@
 //! 「源文件编辑」— edit the raw TOML / JSON when you know exactly what you want.
 
-use egui::{Context, RichText, Ui};
+use egui::{Context, Margin, RichText, Ui};
 use toml_edit::DocumentMut;
 
 use crate::app::App;
@@ -64,37 +64,34 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
             {
                 app.raw_tab_is_catalog = true;
             }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(path_text.clone())
-                        .monospace()
-                        .size(11.5)
-                        .color(theme::TEXT_MUTED),
-                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&path_text)
+                            .monospace()
+                            .size(11.0)
+                            .color(theme::TEXT_MUTED),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&path_text);
             });
         });
+
         ui.add_space(6.0);
-        widgets::note(
+
+        widgets::hint(
             ui,
-            "直接编辑配置文件。改完先「应用到编辑器」，再点右上角「保存配置」。有未应用草稿时，请先应用或放弃，再切换文件。",
-            theme::TEXT_DIM,
+            "直接编辑配置文件。改完先「应用到编辑器」，再点右上角「保存配置」。",
         );
     });
-    ui.add_space(8.0);
-
-    if is_catalog && doc.catalog.is_none() {
-        widgets::note(
-            ui,
-            "当前没有可用的模型目录（文件不存在或不是合法 JSON）。你可以直接把完整 JSON 粘进来，然后点「应用」。",
-            theme::WARN,
-        );
-        ui.add_space(6.0);
-    }
+    ui.add_space(6.0);
 
     if origin != current {
         widgets::note(
             ui,
-            "文件内容已经在别的页面被改过了，这里的文本可能不是最新的。点「同步最新内容」再继续，避免覆盖掉刚才的修改。",
+            "文件内容已在其他页面修改。请先「同步最新内容」再继续，避免覆盖。",
             theme::WARN,
         );
         ui.add_space(4.0);
@@ -102,7 +99,16 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
             app.raw_buffer = current.clone();
             app.raw_origin = current.clone();
         }
-        ui.add_space(6.0);
+        ui.add_space(4.0);
+    }
+
+    if is_catalog && doc.catalog.is_none() {
+        widgets::note(
+            ui,
+            "当前没有可用的模型目录。可以直接粘贴完整 JSON。",
+            theme::WARN,
+        );
+        ui.add_space(4.0);
     }
 
     let validity = if is_catalog {
@@ -120,18 +126,37 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
 
     let lines = app.raw_buffer.lines().count();
     let chars = app.raw_buffer.chars().count();
-    let height = (ui.available_height() - 150.0).max(200.0);
+    let footer_height = if validity.is_err() { 174.0 } else { 104.0 };
+    let height = (ui.available_height() - footer_height).max(120.0);
 
+    // Reuse the existing memoized highlighter. Its built-in fallback supports
+    // TOML; JSON remains plain text without adding a syntax dependency.
+    let code_theme = egui_extras::syntax_highlighting::CodeTheme::from_memory(ui.ctx(), ui.style());
+    let language = if is_catalog { "json" } else { "toml" };
+    let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+        let mut job = egui_extras::syntax_highlighting::highlight(
+            ui.ctx(),
+            ui.style(),
+            &code_theme,
+            text.as_str(),
+            language,
+        );
+        job.wrap.max_width = wrap_width;
+        ui.fonts_mut(|fonts| fonts.layout_job(job))
+    };
     let edit = egui::TextEdit::multiline(&mut app.raw_buffer)
         .font(egui::TextStyle::Monospace)
         .desired_width(f32::INFINITY)
         .desired_rows((height / 15.0).max(10.0) as usize)
         .lock_focus(true)
+        .margin(Margin::same(12))
+        .layouter(&mut layouter)
         .id(egui::Id::new(if is_catalog {
             "raw-catalog"
         } else {
             "raw-config"
         }));
+
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .max_height(height)
@@ -139,17 +164,35 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
             ui.add(edit);
         });
 
-    ui.add_space(8.0);
-    match &validity {
-        Ok(()) => widgets::note(
-            ui,
-            &format!("{} 格式正确，可以应用。", icons::CHECK),
-            theme::OK,
-        ),
-        Err(err) => widgets::note(ui, err, theme::DANGER),
-    }
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+
+    if let Err(err) = &validity {
+        egui::ScrollArea::vertical()
+            .id_salt("raw-validation-error")
+            .max_height(60.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                widgets::note(ui, err, theme::DANGER);
+            });
+        ui.add_space(4.0);
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        if validity.is_ok() {
+            ui.label(
+                RichText::new(format!("{} 格式正确", icons::CHECK))
+                    .size(12.0)
+                    .color(theme::OK),
+            );
+        }
+
+        ui.label(
+            RichText::new(format!("{lines} 行 · {chars} 字符"))
+                .size(11.0)
+                .color(theme::TEXT_MUTED),
+        );
+    });
+    ui.horizontal_wrapped(|ui| {
         let can_apply = validity.is_ok() && app.raw_buffer != origin && origin == current;
         ui.add_enabled_ui(can_apply, |ui| {
             if widgets::primary_button(ui, &format!("{} 应用到编辑器", icons::CHECK)).clicked()
@@ -166,13 +209,7 @@ pub fn show(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         {
             app.raw_buffer = pretty_json(&value);
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(format!("{lines} 行 · {chars} 字符"))
-                    .size(11.5)
-                    .color(theme::TEXT_MUTED),
-            );
-        });
     });
-    ui.add_space(20.0);
+
+    ui.add_space(12.0);
 }

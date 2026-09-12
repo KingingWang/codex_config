@@ -1258,6 +1258,216 @@ fn every_page_renders_at_the_minimum_window_size() {
 }
 
 #[test]
+fn workspace_daily_controls_and_checks_fit_the_standard_first_screen() {
+    let (mut harness, _home) = app_harness();
+    harness.set_size(egui::vec2(1360.0, 880.0));
+    harness.run_steps(4);
+    for label in [
+        "当前模型",
+        "思考深度",
+        "在项目里帮我工作",
+        "配置检查 · 1 项需要留意",
+    ] {
+        let bounds = harness.root().get_by_label(label).rect();
+        assert!(
+            bounds.top() > 56.0 && bounds.bottom() < 835.0,
+            "{label} is outside the first screen: {bounds:?}"
+        );
+    }
+    assert!(!harness.state().has_unsaved_changes());
+    render(&mut harness, "workspace-standard");
+}
+
+#[test]
+fn long_unicode_names_and_paths_render_without_overflow_or_mutations() {
+    let (mut harness, home) = app_harness();
+    let unicode_home = home.path().join("我的工作空间与远程配置".repeat(5));
+    fs::create_dir(&unicode_home).unwrap();
+    for file in ["config.toml", "model-catalog.json"] {
+        fs::copy(home.path().join(file), unicode_home.join(file)).unwrap();
+    }
+    harness.state_mut().load(unicode_home);
+    let long_name = "用于日常开发的模型配置".repeat(8);
+    let doc = harness.state_mut().doc.as_mut().unwrap();
+    doc.config.set_value_at(
+        &["profiles", &long_name, "model"],
+        toml_edit::Value::from(long_name.clone()),
+    );
+    doc.config.set_value_at(
+        &["model_providers", "relay", "name"],
+        toml_edit::Value::from(long_name.clone()),
+    );
+    doc.catalog.as_mut().unwrap()["models"][0]["display_name"] =
+        serde_json::Value::String(long_name);
+    let config_before = doc.config_text();
+    let catalog_before = doc.catalog_text();
+    harness.set_size(egui::vec2(1000.0, 660.0));
+    for page in Page::ALL {
+        harness.state_mut().page = page;
+        harness.run_steps(4);
+        let save = harness.root().get_by_label("保存配置").rect();
+        assert!(
+            save.right() <= 1000.0 && save.bottom() < 80.0,
+            "global actions clipped on {page:?}: {save:?}"
+        );
+        let doc = harness.state().doc.as_ref().unwrap();
+        assert_eq!(doc.config_text(), config_before);
+        assert_eq!(doc.catalog_text(), catalog_before);
+        render(
+            &mut harness,
+            &format!("long-labels-{page:?}").to_lowercase(),
+        );
+    }
+}
+
+#[test]
+fn long_ssh_target_keeps_save_and_environment_switch_accessible() {
+    let (mut harness, home) = remote_app_harness();
+    harness.state_mut().remote.target = Some(codex_config::remote::SshTarget {
+        alias: "开发服务器".repeat(18),
+        config_file: home.path().join("unused-ssh-config"),
+        home: "/fixture/remote".into(),
+    });
+    harness.set_size(egui::vec2(1000.0, 660.0));
+    harness.run_steps(4);
+    for label in ["保存配置", "切换环境…"] {
+        let bounds = harness.root().get_by_label(label).rect();
+        assert!(
+            bounds.left() >= 0.0 && bounds.right() <= 1000.0,
+            "target name pushed {label} out of bounds: {bounds:?}"
+        );
+    }
+    assert!(!harness.state().ssh_busy());
+    render(&mut harness, "long-ssh-target");
+}
+
+#[test]
+fn compact_sidebar_keeps_all_six_navigation_entries_visible() {
+    let (mut harness, _home) = app_harness();
+    for height in [660.0, 759.0, 760.0, 880.0] {
+        harness.set_size(egui::vec2(1000.0, height));
+        harness.run_steps(4);
+        for page in Page::ALL {
+            let bounds = harness.root().get_by_label(page.title()).rect();
+            assert!(
+                bounds.left() >= 0.0 && bounds.right() <= 208.0 && bounds.bottom() < height - 130.0,
+                "navigation requires scrolling or overlaps footer at {height}: {page:?} {bounds:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn profile_editing_and_activation_remain_separate_keyboard_actions() {
+    let (mut harness, home) = app_harness();
+    harness.state_mut().page = Page::Profiles;
+    harness.run_steps(3);
+    let before = fs::read_to_string(home.path().join("config.toml")).unwrap();
+    let edit = format!("{} 编辑内容", codex_config::ui::icons::CARET_RIGHT);
+    harness
+        .root()
+        .get_all_by_label(&edit)
+        .next()
+        .unwrap()
+        .focus();
+    harness.key_press(egui::Key::Space);
+    harness.run_steps(3);
+    assert!(harness.state().editing_profile.is_some());
+    assert!(!harness.state().has_unsaved_changes());
+    harness
+        .root()
+        .get_all_by_label("启用这个配置档")
+        .next()
+        .unwrap()
+        .focus();
+    harness.key_press(egui::Key::Space);
+    harness.run_steps(3);
+    assert!(
+        harness
+            .state()
+            .doc
+            .as_ref()
+            .unwrap()
+            .config
+            .str_at(&["profile"])
+            .is_some()
+    );
+    assert!(harness.state().has_unsaved_changes());
+    assert_eq!(
+        fs::read_to_string(home.path().join("config.toml")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn model_list_selection_only_edits_and_activation_stays_explicit() {
+    let (mut harness, home) = app_harness();
+    harness.state_mut().page = Page::Models;
+    harness.run_steps(3);
+    let before = fs::read_to_string(home.path().join("config.toml")).unwrap();
+    harness.root().get_by_label("Claude Opus 5").click();
+    harness.run_steps(3);
+    assert_eq!(harness.state().editing_model, Some(1));
+    assert!(!harness.state().has_unsaved_changes());
+    assert!(harness.root().query_by_label("设为当前").is_none());
+    click(&mut harness, "设为当前模型");
+    assert_eq!(
+        harness
+            .state()
+            .doc
+            .as_ref()
+            .unwrap()
+            .config
+            .str_at(&["model"])
+            .as_deref(),
+        Some("claude-opus-5"),
+    );
+    assert!(harness.state().has_unsaved_changes());
+    assert_eq!(
+        fs::read_to_string(home.path().join("config.toml")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn source_editor_unicode_input_and_error_recovery_remain_usable_when_compact() {
+    let (mut harness, _home) = app_harness();
+    harness.set_size(egui::vec2(1000.0, 660.0));
+    harness.state_mut().page = Page::Raw;
+    harness.run_steps(3);
+    let original = harness.state().raw_buffer.clone();
+    let source = harness.root().get_by_value(&original);
+    source.focus();
+    source.type_text("\n# 中文输入与高亮\n");
+    harness.run_steps(3);
+    assert!(harness.state().raw_buffer.contains("中文输入与高亮"));
+    assert_eq!(
+        harness.state().doc.as_ref().unwrap().config_text(),
+        original
+    );
+    harness.state_mut().raw_buffer = format!("model = \"{}\n", "很长的无效中文字符串".repeat(60));
+    harness.run_steps(3);
+    let apply_label = format!("{} 应用到编辑器", codex_config::ui::icons::CHECK);
+    assert!(
+        harness
+            .root()
+            .get_by_label(&apply_label)
+            .accesskit_node()
+            .is_disabled()
+    );
+    let discard_label = "\u{21BB} 放弃这里的修改";
+    let discard = harness.root().get_by_label(discard_label).rect();
+    assert!(
+        discard.left() >= 208.0 && discard.right() <= 1000.0 && discard.bottom() < 625.0,
+        "source recovery actions are clipped: {discard:?}"
+    );
+    render(&mut harness, "compact-source-error");
+    click(&mut harness, discard_label);
+    assert_eq!(harness.state().raw_buffer, original);
+    assert!(!harness.state().has_unsaved_changes());
+}
+
+#[test]
 fn safety_presets_are_explicit_and_do_not_write_until_saved() {
     let (mut harness, home) = app_harness();
     let before = fs::read_to_string(home.path().join("config.toml")).unwrap();

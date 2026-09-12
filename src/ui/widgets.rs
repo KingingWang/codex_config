@@ -18,21 +18,25 @@ use crate::ui::theme;
 // Layout helpers
 // ---------------------------------------------------------------------------
 
-/// Page header with icon, title and subtitle. More spacious and welcoming.
+/// A quiet page heading; the workspace summary owns the home screen's emphasis.
 pub fn page_header(ui: &mut Ui, icon: &str, title: &str, subtitle: &str) {
-    ui.add_space(4.0);
     ui.horizontal(|ui| {
-        icon_tile(ui, icon, 42.0, 24.0, theme::ACCENT);
-        ui.add_space(14.0);
+        ui.label(RichText::new(icon).size(26.0).color(theme::ACCENT));
+        ui.add_space(4.0);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
-            ui.label(RichText::new(title).size(26.0).strong().color(theme::TEXT));
+            ui.label(
+                RichText::new(title)
+                    .size(theme::HEADING)
+                    .strong()
+                    .color(theme::TEXT),
+            );
             if !subtitle.is_empty() {
-                ui.label(RichText::new(subtitle).size(14.0).color(theme::TEXT_DIM));
+                ui.label(RichText::new(subtitle).size(13.0).color(theme::TEXT_MUTED));
             }
         });
     });
-    ui.add_space(16.0);
+    ui.add_space(20.0);
 }
 
 /// A rounded tile with a single vector icon centred inside — used for page and
@@ -66,7 +70,7 @@ pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     theme::card_frame().show(ui, add).inner
 }
 
-/// A card with an icon, a title and an optional subtitle.
+/// A content section with a lightweight heading, without nested icon frames.
 pub fn section<R>(
     ui: &mut Ui,
     icon: &str,
@@ -78,19 +82,26 @@ pub fn section<R>(
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             if !icon.is_empty() {
-                icon_tile(ui, icon, 34.0, 18.0, theme::ACCENT);
-                ui.add_space(10.0);
+                ui.label(RichText::new(icon).size(21.0).color(theme::ACCENT));
+                ui.add_space(4.0);
             }
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 3.0;
-                ui.label(RichText::new(title).size(17.0).strong().color(theme::TEXT));
+                ui.label(
+                    RichText::new(title)
+                        .size(theme::SECTION_HEADING)
+                        .strong()
+                        .color(theme::TEXT),
+                );
                 if !subtitle.is_empty() {
-                    ui.label(RichText::new(subtitle).size(13.0).color(theme::TEXT_DIM));
+                    ui.label(
+                        RichText::new(subtitle)
+                            .size(theme::CAPTION)
+                            .color(theme::TEXT_MUTED),
+                    );
                 }
             });
         });
-        ui.add_space(14.0);
-        ui.separator();
         ui.add_space(14.0);
         add(ui)
     })
@@ -154,7 +165,7 @@ pub fn field<R>(ui: &mut Ui, spec: FieldSpec<'_>, add: impl FnOnce(&mut Ui) -> R
         ui.add_space(8.0);
         return result;
     }
-    let label_w = (total * 0.42).min(360.0);
+    let label_w = (total * 0.38).min(300.0);
     let response = ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             wrap(ui);
@@ -199,24 +210,27 @@ pub fn hint(ui: &mut Ui, text: &str) {
 pub fn note(ui: &mut Ui, text: &str, color: Color32) {
     let frame = egui::Frame::new()
         .fill(color.gamma_multiply(0.1))
-        .stroke(Stroke::new(1.0, color.gamma_multiply(0.35)))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(14));
+        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+        .inner_margin(Margin::symmetric(12, 10));
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.label(RichText::new(text).size(13.0).color(color));
     });
 }
 
-pub fn badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
-    let frame = egui::Frame::new()
-        .fill(bg)
-        .stroke(Stroke::new(1.0, fg.gamma_multiply(0.5)))
-        .corner_radius(CornerRadius::same(20))
-        .inner_margin(Margin::symmetric(8, 2));
-    frame.show(ui, |ui| {
-        ui.label(RichText::new(text).size(11.5).strong().color(fg));
-    });
+/// Compact read-only status; returns its painted bounds, independent of row height.
+pub fn badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) -> egui::Rect {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), egui::FontId::proportional(11.5), fg);
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(galley.size().x + 16.0, 22.0), Sense::hover());
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), text));
+    ui.painter().rect_filled(rect, CornerRadius::same(5), bg);
+    let position = rect.center() - galley.size() * 0.5;
+    ui.painter().galley(position, galley, fg);
+    rect
 }
 
 /// A tiny rounded pill holding a number, used for sidebar counts.
@@ -369,7 +383,8 @@ pub fn choice_dropdown(
     let mut changed = false;
     egui::ComboBox::from_id_salt(Id::new(id))
         .selected_text(RichText::new(selected).size(13.5).color(theme::TEXT))
-        .width(ui.available_width().max(220.0))
+        .width(ui.available_width())
+        .truncate()
         .show_ui(ui, |ui| {
             if allow_unset {
                 let is_selected = current.is_empty();
@@ -432,7 +447,8 @@ pub fn string_dropdown(
     };
     egui::ComboBox::from_id_salt(Id::new(id))
         .selected_text(RichText::new(selected).size(13.5).color(theme::TEXT))
-        .width(ui.available_width().max(220.0))
+        .width(ui.available_width())
+        .truncate()
         .show_ui(ui, |ui| {
             for (value, label) in options {
                 let is_selected = *value == *current;
@@ -639,18 +655,22 @@ pub fn primary_button(ui: &mut Ui, text: &str) -> egui::Response {
     )
     .fill(theme::ACCENT)
     .stroke(Stroke::NONE)
-    .corner_radius(CornerRadius::same(10))
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
     .min_size(Vec2::new(0.0, 36.0));
-    ui.add(button)
+    let response = ui.add(button);
+    focus_ring(ui, &response);
+    response
 }
 
 pub fn ghost_button(ui: &mut Ui, text: &str) -> egui::Response {
     let button = egui::Button::new(RichText::new(text).size(13.0).color(theme::TEXT))
         .fill(theme::CARD_ALT)
         .stroke(Stroke::new(1.0, theme::BORDER))
-        .corner_radius(CornerRadius::same(10))
+        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
         .min_size(Vec2::new(0.0, 34.0));
-    ui.add(button)
+    let response = ui.add(button);
+    focus_ring(ui, &response);
+    response
 }
 
 pub fn danger_button(ui: &mut Ui, text: &str) -> egui::Response {
@@ -668,7 +688,20 @@ pub fn link_button(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
         .stroke(Stroke::NONE)
         .corner_radius(CornerRadius::same(6))
         .min_size(Vec2::new(0.0, 22.0));
-    ui.add(button)
+    let response = ui.add(button);
+    focus_ring(ui, &response);
+    response
+}
+
+fn focus_ring(ui: &Ui, response: &egui::Response) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect,
+            CornerRadius::same(theme::CONTROL_RADIUS),
+            Stroke::new(1.5, theme::ACCENT_HI),
+            egui::StrokeKind::Inside,
+        );
+    }
 }
 
 pub fn icon_button(ui: &mut Ui, icon: &str, color: Color32, tooltip: &str) -> egui::Response {
@@ -694,19 +727,34 @@ pub fn clickable_frame<R>(
     } else {
         (theme::INPUT_BG, Stroke::new(1.0, theme::BORDER))
     };
-    let frame = egui::Frame::new()
+    let mut frame = egui::Frame::new()
         .fill(fill)
         .stroke(stroke)
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(12));
-    let mut inner = None;
-    let response = frame
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            inner = Some(add(ui));
-        })
-        .response;
-    (response.interact(Sense::click()), inner.unwrap())
+        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+        .inner_margin(Margin::same(12))
+        .begin(ui);
+    frame
+        .content_ui
+        .set_width(frame.content_ui.available_width());
+    let inner = add(&mut frame.content_ui);
+    let response = frame.allocate_space(ui).interact(Sense::click());
+    if response.hovered() && !selected {
+        frame.frame.fill = theme::CARD_ALT;
+        frame.frame.stroke = Stroke::new(1.0, theme::BORDER_STRONG);
+    }
+    frame.paint(ui);
+    if selected {
+        let marker = egui::Rect::from_min_size(
+            response.rect.left_top() + egui::vec2(0.0, 12.0),
+            egui::vec2(3.0, (response.rect.height() - 24.0).max(0.0)),
+        );
+        ui.painter().rect_filled(marker, 2, theme::ACCENT);
+    }
+    focus_ring(ui, &response);
+    (
+        response.on_hover_cursor(egui::CursorIcon::PointingHand),
+        inner,
+    )
 }
 
 pub fn empty_state(ui: &mut Ui, icon: &str, title: &str, body: &str) {
@@ -733,21 +781,19 @@ pub fn empty_state(ui: &mut Ui, icon: &str, title: &str, body: &str) {
 }
 
 pub fn search_field(ui: &mut Ui, query: &mut String) -> bool {
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(icons::SEARCH)
-                .size(15.0)
-                .color(theme::TEXT_MUTED),
-        );
-        ui.add_sized(
-            Vec2::new(ui.available_width().max(160.0), 36.0),
-            egui::TextEdit::singleline(query)
-                .hint_text(RichText::new("搜索…").color(theme::TEXT_MUTED).size(13.0))
-                .id(Id::new("search-box")),
-        )
-        .changed()
-    })
-    .inner
+    ui.add_sized(
+        Vec2::new(ui.available_width(), 36.0),
+        egui::TextEdit::singleline(query)
+            .hint_text(
+                RichText::new(format!("{}  搜索…", icons::SEARCH))
+                    .color(theme::TEXT_MUTED)
+                    .size(13.0),
+            )
+            .vertical_align(Align::Center)
+            .margin(Margin::symmetric(10, 6))
+            .id(Id::new("search-box")),
+    )
+    .changed()
 }
 
 /// Simple centred modal dialog. Returns the closure result while open.

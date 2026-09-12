@@ -93,21 +93,18 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
     {
         app.select_provider(&row.id);
     }
-    let list_width = (ui.available_width() * 0.27).clamp(224.0, 280.0);
-    let height = (ui.available_height() - 20.0).max(200.0);
+    let list_width = (ui.available_width() * 0.27).clamp(224.0, 250.0);
     let mut action = ProviderAction::None;
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if widgets::primary_button(ui, &format!("{} 添加服务商", icons::ADD)).clicked() {
             app.dialog = Some(Dialog::NewProvider);
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(format!("{} 个服务商", rows.len()))
-                    .size(12.0)
-                    .color(theme::TEXT_MUTED),
-            );
-        });
+        ui.label(
+            RichText::new(format!("{} 个服务商", rows.len()))
+                .size(12.0)
+                .color(theme::TEXT_MUTED),
+        );
     });
     ui.add_space(8.0);
 
@@ -132,7 +129,7 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                 .collect();
             ScrollArea::vertical()
                 .id_salt("provider-list")
-                .max_height(height - 60.0)
+                .max_height(ui.available_height().max(120.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     if filtered.is_empty() {
@@ -142,54 +139,59 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                         let selected = app.editing_provider.as_deref() == Some(row.id.as_str());
                         let (response, _) = widgets::clickable_frame(ui, selected, |ui| {
                             ui.horizontal(|ui| {
+                                let title_width = if row.active {
+                                    (ui.available_width() - 66.0).max(80.0)
+                                } else {
+                                    ui.available_width()
+                                };
                                 ui.vertical(|ui| {
+                                    ui.set_width(title_width);
                                     ui.spacing_mut().item_spacing.y = 2.0;
-                                    ui.label(
+                                    ui.add(egui::Label::new(
                                         RichText::new(row.name.clone())
                                             .size(13.0)
                                             .strong()
                                             .color(theme::TEXT),
-                                    );
-                                    ui.label(
+                                    ).truncate()).on_hover_text(&row.name);
+                                    ui.add(egui::Label::new(
                                         RichText::new(row.id.clone())
                                             .monospace()
                                             .size(11.0)
                                             .color(theme::TEXT_MUTED),
-                                    );
+                                    ).truncate()).on_hover_text(&row.id);
                                 });
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::TOP),
-                                    |ui| {
-                                        if row.active {
+                                if row.active {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::TOP),
+                                        |ui| {
                                             widgets::badge(ui, "使用中", theme::OK, theme::OK_WEAK);
-                                        }
-                                    },
-                                );
-                            });
-                            ui.add_space(2.0);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                widgets::badge(ui, row.wire.label(), theme::ACCENT_TEXT, theme::ACCENT_WEAK);
-                                if row.models > 0 {
-                                    widgets::badge(
-                                        ui,
-                                        &format!("{} 个模型", row.models),
-                                        theme::TEXT_DIM,
-                                        theme::CARD_ALT,
+                                        },
                                     );
                                 }
                             });
-                            ui.label(
-                                RichText::new(if row.base_url.is_empty() {
-                                    "（未填地址）".to_string()
-                                } else {
-                                    row.base_url.clone()
-                                })
-                                .monospace()
-                                .size(10.5)
-                                .color(theme::TEXT_MUTED),
-                            );
-                            ui.label(RichText::new(row.auth.clone()).size(11.0).color(theme::TEXT_DIM));
+                            ui.add_space(2.0);
+                            // Single compact metadata line: protocol / model count / address
+                            let mut meta_parts: Vec<String> = Vec::new();
+                            meta_parts.push(row.wire.label().to_string());
+                            if row.models > 0 {
+                                meta_parts.push(format!("{}模型", row.models));
+                            }
+                            if !row.base_url.is_empty() {
+                                meta_parts.push(row.base_url.clone());
+                            }
+                            ui.add(egui::Label::new(
+                                RichText::new(meta_parts.join(" · "))
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(theme::TEXT_MUTED),
+                            ).truncate()).on_hover_text(meta_parts.join("\n"));
+                            if !row.auth.is_empty() {
+                                ui.add(egui::Label::new(
+                                    RichText::new(row.auth.clone())
+                                        .size(11.0)
+                                        .color(theme::TEXT_DIM),
+                                ).truncate()).on_hover_text(&row.auth);
+                            }
                         });
                         if response.clicked() {
                             app.select_provider(&row.id);
@@ -206,7 +208,7 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
             ui.set_width(width);
             ScrollArea::vertical()
                 .id_salt("provider-editor")
-                .max_height(height)
+                .max_height(ui.available_height().max(120.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     let editing = app.editing_provider.clone();
@@ -223,7 +225,6 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                         ),
                     }
                 });
-            ui.add_space(30.0);
         });
     });
 
@@ -271,18 +272,27 @@ fn editor(
     ui.vertical(|ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(
-                RichText::new(row.name.clone())
-                    .size(19.0)
-                    .strong()
-                    .color(theme::TEXT),
-            );
-            ui.label(
-                RichText::new(format!("[model_providers.{}]", row.id))
-                    .monospace()
-                    .size(12.0)
-                    .color(theme::TEXT_MUTED),
-            );
+            ui.add(
+                egui::Label::new(
+                    RichText::new(row.name.clone())
+                        .size(19.0)
+                        .strong()
+                        .color(theme::TEXT),
+                )
+                .truncate(),
+            )
+            .on_hover_text(&row.name);
+            let id_text = format!("[model_providers.{}]", row.id);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(id_text.clone())
+                        .monospace()
+                        .size(12.0)
+                        .color(theme::TEXT_MUTED),
+                )
+                .truncate(),
+            )
+            .on_hover_text(&id_text);
         });
         ui.horizontal_wrapped(|ui| {
             if row.active {

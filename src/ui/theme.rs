@@ -7,11 +7,11 @@ use eframe::egui::{
 };
 
 pub const BG: Color32 = Color32::from_rgb(0x11, 0x13, 0x18);
-pub const PANEL: Color32 = Color32::from_rgb(0x15, 0x18, 0x1E);
-pub const CARD: Color32 = Color32::from_rgb(0x1C, 0x20, 0x28);
+pub const PANEL: Color32 = Color32::from_rgb(0x14, 0x17, 0x1D);
+pub const CARD: Color32 = Color32::from_rgb(0x1A, 0x1E, 0x26);
 pub const CARD_ALT: Color32 = Color32::from_rgb(0x23, 0x28, 0x32);
 pub const INPUT_BG: Color32 = Color32::from_rgb(0x12, 0x15, 0x1B);
-pub const BORDER: Color32 = Color32::from_rgb(0x30, 0x37, 0x44);
+pub const BORDER: Color32 = Color32::from_rgb(0x2B, 0x32, 0x3E);
 pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x49, 0x55, 0x69);
 pub const TEXT: Color32 = Color32::from_rgb(0xE7, 0xEB, 0xF2);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(0xB5, 0xBE, 0xCC);
@@ -30,6 +30,13 @@ pub const DANGER: Color32 = Color32::from_rgb(0xF0, 0x92, 0x98);
 pub const DANGER_WEAK: Color32 = Color32::from_rgb(0x3C, 0x27, 0x2E);
 pub const INFO: Color32 = ACCENT;
 pub const INFO_WEAK: Color32 = ACCENT_WEAK;
+
+pub const HEADING: f32 = 26.0;
+pub const SECTION_HEADING: f32 = 17.0;
+pub const BODY: f32 = 14.0;
+pub const CAPTION: f32 = 12.0;
+pub const CONTROL_RADIUS: u8 = 8;
+pub const CARD_RADIUS: u8 = 12;
 
 // -- Fonts ------------------------------------------------------------------
 
@@ -170,45 +177,45 @@ pub fn style() -> Style {
     visuals.widgets.inactive.weak_bg_fill = CARD_ALT;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
-    visuals.widgets.inactive.corner_radius = CornerRadius::same(10);
+    visuals.widgets.inactive.corner_radius = CornerRadius::same(CONTROL_RADIUS);
     visuals.widgets.inactive.expansion = 0.0;
 
     visuals.widgets.hovered.bg_fill = SELECTION_WEAK;
     visuals.widgets.hovered.weak_bg_fill = SELECTION_WEAK;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.25, TEXT);
-    visuals.widgets.hovered.corner_radius = CornerRadius::same(10);
-    visuals.widgets.hovered.expansion = 0.5;
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(CONTROL_RADIUS);
+    visuals.widgets.hovered.expansion = 0.0;
 
     visuals.widgets.active.bg_fill = ACCENT_WEAK;
     visuals.widgets.active.weak_bg_fill = ACCENT_WEAK;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
     visuals.widgets.active.fg_stroke = Stroke::new(1.25, ACCENT_TEXT);
-    visuals.widgets.active.corner_radius = CornerRadius::same(10);
-    visuals.widgets.active.expansion = 0.5;
+    visuals.widgets.active.corner_radius = CornerRadius::same(CONTROL_RADIUS);
+    visuals.widgets.active.expansion = 0.0;
 
     visuals.widgets.open.bg_fill = CARD_ALT;
     visuals.widgets.open.weak_bg_fill = CARD_ALT;
     visuals.widgets.open.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, TEXT);
-    visuals.widgets.open.corner_radius = CornerRadius::same(10);
+    visuals.widgets.open.corner_radius = CornerRadius::same(CONTROL_RADIUS);
 
     Style {
         text_styles: [
-            (TextStyle::Heading, egui::FontId::proportional(26.0)), // Large headings
-            (TextStyle::Body, egui::FontId::proportional(15.0)),    // Body text
-            (TextStyle::Monospace, egui::FontId::monospace(13.5)),  // Code/IDs
-            (TextStyle::Button, egui::FontId::proportional(14.5)),  // Button text
-            (TextStyle::Small, egui::FontId::proportional(13.0)),   // Small text
+            (TextStyle::Heading, egui::FontId::proportional(HEADING)),
+            (TextStyle::Body, egui::FontId::proportional(BODY)),
+            (TextStyle::Monospace, egui::FontId::monospace(13.5)), // Code/IDs
+            (TextStyle::Button, egui::FontId::proportional(BODY)),
+            (TextStyle::Small, egui::FontId::proportional(CAPTION)),
         ]
         .into(),
         spacing: egui::Spacing {
-            item_spacing: egui::vec2(10.0, 10.0),
-            button_padding: egui::vec2(12.0, 8.0),
-            interact_size: egui::vec2(120.0, 36.0),
+            item_spacing: egui::vec2(8.0, 8.0),
+            button_padding: egui::vec2(12.0, 6.0),
+            interact_size: egui::vec2(40.0, 32.0),
             combo_width: 100.0,
             scroll: egui::style::ScrollStyle {
-                bar_width: 10.0,
+                bar_width: 6.0,
                 ..Default::default()
             },
             window_margin: Margin::same(16),
@@ -224,7 +231,7 @@ pub fn card_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(CARD)
         .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(CornerRadius::same(16))
+        .corner_radius(CornerRadius::same(CARD_RADIUS))
         .inner_margin(Margin::same(20))
 }
 
@@ -233,7 +240,7 @@ pub fn subtle_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(INPUT_BG)
         .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(CornerRadius::same(12))
+        .corner_radius(CornerRadius::same(CONTROL_RADIUS))
         .inner_margin(Margin::same(14))
 }
 

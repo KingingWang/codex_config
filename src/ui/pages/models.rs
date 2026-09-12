@@ -100,12 +100,11 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
     {
         app.select_model(row.index);
     }
-    let list_width = (ui.available_width() * 0.27).clamp(224.0, 280.0);
-    let height = (ui.available_height() - 20.0).max(200.0);
+    let list_width = (ui.available_width() * 0.27).clamp(224.0, 250.0);
     let mut action = ModelAction::None;
 
     // toolbar
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if widgets::primary_button(ui, &format!("{} 添加模型", icons::ADD)).clicked() {
             app.dialog = Some(Dialog::NewModel {
                 slug: String::new(),
@@ -148,19 +147,21 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                     .color(theme::TEXT_MUTED),
             );
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(format!("{} 个模型", rows.len()))
-                    .size(12.0)
-                    .color(theme::TEXT_MUTED),
-            );
-        });
+        ui.label(
+            RichText::new(format!("{} 个模型", rows.len()))
+                .size(12.0)
+                .color(theme::TEXT_MUTED),
+        );
     });
-    ui.label(
-        RichText::new(format!("模型目录文件：{catalog_path_text}"))
-            .size(11.5)
-            .color(theme::TEXT_MUTED),
-    );
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!("模型目录文件：{catalog_path_text}"))
+                .size(11.5)
+                .color(theme::TEXT_MUTED),
+        )
+        .truncate(),
+    )
+    .on_hover_text(&catalog_path_text);
     ui.add_space(8.0);
 
     let query = app.model_query.clone();
@@ -185,7 +186,7 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                 .collect();
             ScrollArea::vertical()
                 .id_salt("model-list")
-                .max_height(height - 60.0)
+                .max_height(ui.available_height().max(120.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     if filtered.is_empty() {
@@ -193,12 +194,16 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                     }
                     for row in &filtered {
                         let selected = app.editing_model == Some(row.index);
-                        let slug = row.slug.clone();
-                        let (response, set_active) = widgets::clickable_frame(ui, selected, |ui| {
-                            let mut set_active = false;
+
+                        let (response, _) = widgets::clickable_frame(ui, selected, |ui| {
                             ui.horizontal(|ui| {
+                                let title_width = if row.active {
+                                    (ui.available_width() - 66.0).max(80.0)
+                                } else {
+                                    ui.available_width()
+                                };
                                 ui.vertical(|ui| {
-                                    ui.set_width((list_width - 118.0).max(100.0));
+                                    ui.set_width(title_width);
                                     ui.spacing_mut().item_spacing.y = 2.0;
                                     ui.add(egui::Label::new(
                                         RichText::new(row.display.clone())
@@ -213,54 +218,45 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                                             .color(theme::TEXT_MUTED),
                                     ).truncate()).on_hover_text(&row.slug);
                                 });
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::TOP),
-                                    |ui| {
-                                        if row.active {
+                                if row.active {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::TOP),
+                                        |ui| {
                                             widgets::badge(ui, "使用中", theme::OK, theme::OK_WEAK);
-                                        } else if ui
-                                            .small_button("设为当前")
-                                            .on_hover_text("把这个模型设成 config.toml 里的 model")
-                                            .clicked()
-                                        {
-                                            set_active = true;
-                                        }
-                                    },
-                                );
-                            });
-                            ui.add_space(2.0);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                if !row.provider.is_empty() {
-                                    widgets::badge(ui, &row.provider, theme::ACCENT_TEXT, theme::ACCENT_WEAK);
-                                } else {
-                                    widgets::badge(ui, "未绑定服务商", theme::WARN, theme::WARN_WEAK);
-                                }
-                                if let Some(window) = row.context_window {
-                                    widgets::badge(
-                                        ui,
-                                        &format!("{}k 上下文", window / 1000),
-                                        theme::TEXT_DIM,
-                                        theme::CARD_ALT,
+                                        },
                                     );
                                 }
-                                widgets::badge(
-                                    ui,
-                                    &format!("{} 档推理", row.levels),
-                                    theme::TEXT_DIM,
-                                    theme::CARD_ALT,
-                                );
-                                if row.hidden {
-                                    widgets::badge(ui, "已禁用", theme::TEXT_MUTED, theme::CARD_ALT);
-                                }
                             });
-                            set_active
+                            ui.add_space(2.0);
+                            // Single compact metadata line: provider / context / reasoning
+                            let mut meta_parts: Vec<String> = Vec::new();
+                            if !row.provider.is_empty() {
+                                meta_parts.push(row.provider.clone());
+                            }
+                            if let Some(window) = row.context_window {
+                                meta_parts.push(format!("{}k 上下文", window / 1000));
+                            }
+                            if row.levels > 0 {
+                                meta_parts.push(format!("{}档推理", row.levels));
+                            }
+                            if !meta_parts.is_empty() {
+                                let meta_text = meta_parts.join(" · ");
+                                ui.add(egui::Label::new(
+                                    RichText::new(meta_text.clone())
+                                        .size(11.0)
+                                        .color(theme::TEXT_MUTED),
+                                ).truncate()).on_hover_text(&meta_text);
+                            }
+                            // Warning badges only
+                            if row.provider.is_empty() {
+                                widgets::badge(ui, "未绑定服务商", theme::WARN, theme::WARN_WEAK);
+                            }
+                            if row.hidden {
+                                widgets::badge(ui, "已禁用", theme::TEXT_MUTED, theme::CARD_ALT);
+                            }
                         });
                         if response.clicked() {
                             app.select_model(row.index);
-                        }
-                        if set_active {
-                            action = ModelAction::SetActive(slug);
                         }
                         ui.add_space(5.0);
                     }
@@ -275,7 +271,7 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
             ui.set_width(width);
             ScrollArea::vertical()
                 .id_salt("model-editor")
-                .max_height(height)
+                .max_height(ui.available_height().max(120.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| match app.editing_model {
                     Some(index) if index < rows.len() => {
@@ -289,7 +285,6 @@ pub fn show(app: &mut App, ui: &mut Ui, ctx: &Context) {
                         "左边列表点一下就能编辑；也可以点上面的「+ 添加模型」新建一个。\n每个字段下面都写了它是干什么用的，照着填就行。",
                     ),
                 });
-            ui.add_space(30.0);
         });
     });
 
@@ -384,22 +379,31 @@ fn editor(
     ui.vertical(|ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(
-                RichText::new(if editor.display_name.is_empty() {
-                    row.slug.clone()
-                } else {
-                    editor.display_name.clone()
-                })
-                .size(19.0)
-                .strong()
-                .color(theme::TEXT),
-            );
-            ui.label(
-                RichText::new(row.slug.clone())
-                    .monospace()
-                    .size(12.0)
-                    .color(theme::TEXT_MUTED),
-            );
+            let title = if editor.display_name.is_empty() {
+                row.slug.clone()
+            } else {
+                editor.display_name.clone()
+            };
+            ui.add(
+                egui::Label::new(
+                    RichText::new(title.clone())
+                        .size(19.0)
+                        .strong()
+                        .color(theme::TEXT),
+                )
+                .truncate(),
+            )
+            .on_hover_text(&title);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(row.slug.clone())
+                        .monospace()
+                        .size(12.0)
+                        .color(theme::TEXT_MUTED),
+                )
+                .truncate(),
+            )
+            .on_hover_text(&row.slug);
         });
         ui.horizontal_wrapped(|ui| {
             if !row.active && widgets::primary_button(ui, "设为当前模型").clicked() {
