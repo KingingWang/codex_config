@@ -377,8 +377,13 @@ mod tests {
             while started.elapsed() < Duration::from_secs(5) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // macOS can inherit the listener's nonblocking mode.
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        stream
+                            .set_write_timeout(Some(Duration::from_secs(2)))
                             .unwrap();
                         let mut request = Vec::new();
                         let mut buffer = [0; 2048];

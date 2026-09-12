@@ -42,6 +42,9 @@ impl Server {
             while !flag.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
+                        // Accepted sockets inherit nonblocking mode on macOS.
+                        // Only accept() is polled; request/response I/O must wait.
+                        socket.set_nonblocking(false).unwrap();
                         socket
                             .set_read_timeout(Some(Duration::from_secs(2)))
                             .unwrap();
@@ -447,22 +450,22 @@ fn oversized_truncated_and_failed_reads_are_not_successful_lists() {
     let body = "x".repeat(2 * 1024 * 1024 + 1);
     let server = Server::new(200, &body, "");
     let result = invoke(provider(&server.url), &[]);
-    assert!(!outcome(&result).ok);
-    assert!(outcome(&result).summary.contains("2 MiB"));
+    assert!(!outcome(&result).ok, "{result}");
+    assert!(outcome(&result).summary.contains("2 MiB"), "{result}");
 
     let server = Server::raw(format!(
         "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}"
     ));
     let result = invoke(provider(&server.url), &[]);
-    assert!(!outcome(&result).ok);
-    assert!(outcome(&result).summary.contains("2 MiB"));
+    assert!(!outcome(&result).ok, "{result}");
+    assert!(outcome(&result).summary.contains("2 MiB"), "{result}");
 
     let server = Server::raw(
         "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{\"data\":[]}".into(),
     );
     let result = invoke(provider(&server.url), &[]);
-    assert!(!outcome(&result).ok);
-    assert!(outcome(&result).summary.contains("不完整"));
+    assert!(!outcome(&result).ok, "{result}");
+    assert!(outcome(&result).summary.contains("不完整"), "{result}");
 }
 
 #[test]

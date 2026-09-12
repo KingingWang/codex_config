@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 测试
+
+- 显式将本机回环 HTTP 测试服务器接受的连接设为阻塞模式并保留读写超时，避免 macOS 继承非阻塞状态导致大响应测试提前截断；仅修改测试夹具，不影响 v0.5.0 应用产物。
+
 ## [0.5.0] - 2026-09-13
 
 ### 界面升级
