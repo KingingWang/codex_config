@@ -1,6 +1,6 @@
 [package]
 name = "codex_config"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 description = "A friendly desktop GUI for editing the Codex CLI config.toml and model catalog"
 license = "MIT"

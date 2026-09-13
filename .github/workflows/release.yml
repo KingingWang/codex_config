@@ -86,43 +86,75 @@ jobs:
 
   # ---------------------------------------------------------------- Windows
   windows:
-    name: Windows (.zip)
-    runs-on: windows-latest
+    name: Windows (${{ matrix.arch }} .zip)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Run non-GUI regressions
+        run: cargo test --locked --target ${{ matrix.target }} --lib --test document --test persistence --test validation --test editor_preservation --test catalog --test editors --test remote --test remote_models --test ssh_config
 
       - name: Package .zip
         shell: pwsh
         run: |
           $dir = "codex-config-windows"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          Copy-Item target/release/codex-config.exe "$dir/codex-config.exe"
+          Copy-Item target/${{ matrix.target }}/release/codex-config.exe "$dir/codex-config.exe"
           Copy-Item README.md "$dir/README.md"
-          Compress-Archive -Path "$dir/*" -DestinationPath "codex-config-windows-x64.zip" -Force
+          Compress-Archive -Path "$dir/*" -DestinationPath "codex-config-windows-${{ matrix.arch }}.zip" -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-zip
-          path: codex-config-windows-x64.zip
+          name: windows-zip-${{ matrix.arch }}
+          path: codex-config-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
 
   # ---------------------------------------------------------------- Linux
   linux:
-    name: Linux (.AppImage)
-    # Build on the oldest supported runner so the glibc baseline is broad.
-    runs-on: ubuntu-22.04
+    name: Linux (${{ matrix.arch }} .AppImage)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    # Keep both architectures on Ubuntu 22.04 for the same glibc baseline.
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Install GUI build/runtime deps
         run: |
@@ -134,7 +166,10 @@ jobs:
             libfuse2 fuse
 
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Run non-GUI regressions
+        run: cargo test --locked --target ${{ matrix.target }} --lib --test document --test persistence --test validation --test editor_preservation --test catalog --test editors --test remote --test remote_models --test ssh_config
 
       - name: Assemble AppDir and build AppImage
         run: |
@@ -143,7 +178,7 @@ jobs:
           mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" \
                    "$APPDIR/usr/share/icons/hicolor/256x256/apps"
 
-          cp target/release/codex-config "$APPDIR/usr/bin/codex-config"
+          cp target/${{ matrix.target }}/release/codex-config "$APPDIR/usr/bin/codex-config"
           cp packaging/codex-config.desktop "$APPDIR/usr/share/applications/codex-config.desktop"
           cp packaging/codex-config.desktop "$APPDIR/codex-config.desktop"
           cp assets/icon/icon-256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/codex-config.png"
@@ -156,14 +191,15 @@ jobs:
           SH
           chmod +x "$APPDIR/AppRun"
 
-          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage -O appimagetool
           chmod +x appimagetool
-          ARCH=x86_64 ./appimagetool "$APPDIR" codex-config-linux-x86_64.AppImage
+          ARCH=${{ matrix.arch }} ./appimagetool --appimage-extract-and-run "$APPDIR" codex-config-linux-${{ matrix.arch }}.AppImage
 
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-appimage
-          path: codex-config-linux-x86_64.AppImage
+          name: linux-appimage-${{ matrix.arch }}
+          path: codex-config-linux-${{ matrix.arch }}.AppImage
+          if-no-files-found: error
 
   # ---------------------------------------------------------------- Release
   release:
@@ -181,14 +217,18 @@ jobs:
         with:
           files: |
             dist/macos-dmg/codex-config-macos-universal.dmg
-            dist/windows-zip/codex-config-windows-x64.zip
-            dist/linux-appimage/codex-config-linux-x86_64.AppImage
+            dist/windows-zip-x64/codex-config-windows-x64.zip
+            dist/windows-zip-arm64/codex-config-windows-arm64.zip
+            dist/linux-appimage-x86_64/codex-config-linux-x86_64.AppImage
+            dist/linux-appimage-aarch64/codex-config-linux-aarch64.AppImage
+          fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
             # Codex 配置助手 ${{ github.ref_name }}
 
             ## 本次更新
 
+            - 新增 Linux aarch64 与 Windows ARM64 的 ARM 原生构建，原有 x86_64 / macOS 通用包不变。
             - 全新石墨灰工作台：统一排版、间距、控件和蓝色强调，精简视觉装饰。
             - 首页环境与配置概览，模型和权限自适应分栏；1000×660 小窗口也能访问全部导航与主要操作。
             - 紧凑的模型、服务商和配置档列表，长名称与路径可悬停查看；选中模型只编辑，启用需明确操作。
@@ -210,5 +250,7 @@ jobs:
             | 系统 | 下载 | 使用方法 |
             |------|------|----------|
             | **macOS**（Intel + Apple Silicon 通用）| `codex-config-macos-universal.dmg` | 打开 dmg，把 App 拖进「应用程序」。首次打开若提示未验证开发者，右键点图标选「打开」。 |
-            | **Windows 10/11 (64 位)** | `codex-config-windows-x64.zip` | 解压后双击 `codex-config.exe`。SmartScreen 提示时点「更多信息 → 仍要运行」。 |
+            | **Windows 10/11 (x64，Intel / AMD)** | `codex-config-windows-x64.zip` | 解压后双击 `codex-config.exe`。SmartScreen 提示时点「更多信息 → 仍要运行」。 |
+            | **Windows 11 (ARM64)** | `codex-config-windows-arm64.zip` | 解压后双击 `codex-config.exe`；适用于 ARM 设备。 |
             | **Linux (x86_64)** | `codex-config-linux-x86_64.AppImage` | `chmod +x` 后运行；需要系统图形库和 FUSE，详见 README。 |
+            | **Linux (aarch64 / ARM64)** | `codex-config-linux-aarch64.AppImage` | `chmod +x` 后运行；需要系统图形库和 FUSE，详见 README。 |

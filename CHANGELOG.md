@@ -5,7 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-09-13
+
+### 新平台支持
+
+- 新增 Linux aarch64 与 Windows ARM64 的 ARM 原生构建产包，原有 x86_64 / macOS 通用包名称不变。
+- 发布流水线改为按架构矩阵构建，ARM 使用 GitHub 原生 runner；ARM64 桌面体验仍需实机验证。
 
 ### 测试
 

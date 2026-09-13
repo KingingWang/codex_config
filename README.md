@@ -17,8 +17,10 @@
 | 系统 | 下载文件 | 使用方法 |
 | --- | --- | --- |
 | **macOS**（Intel + Apple Silicon 通用）| `codex-config-macos-universal.dmg` | 打开 dmg，把 App 拖进「应用程序」。首次打开若提示未验证开发者，右键点图标选「打开」。 |
-| **Windows 10/11 (64 位)** | `codex-config-windows-x64.zip` | 解压后双击 `codex-config.exe`。SmartScreen 提示时点「更多信息 → 仍要运行」。 |
+| **Windows 10/11 (x64，Intel / AMD)** | `codex-config-windows-x64.zip` | 解压后双击 `codex-config.exe`。SmartScreen 提示时点「更多信息 → 仍要运行」。 |
+| **Windows 11 (ARM64)** | `codex-config-windows-arm64.zip` | 解压后双击 `codex-config.exe`；适用于 ARM 设备。 |
 | **Linux (x86_64)** | `codex-config-linux-x86_64.AppImage` | `chmod +x` 后运行；需要系统提供图形库和 FUSE，详见下方 Linux 依赖说明。 |
+| **Linux (aarch64 / ARM64)** | `codex-config-linux-aarch64.AppImage` | `chmod +x` 后运行；需要系统提供图形库和 FUSE，详见下方 Linux 依赖说明。 |
 
 > 安装包由 GitHub Actions 自动构建，未做正式代码签名/公证，所以首次打开会有上面提到的系统提示，属正常现象。
 
@@ -195,11 +197,16 @@ git push origin v0.5.0
 ```
 
 也可以在 Actions 页面手动 “Run workflow” 只构建产物、不发 Release，用来试跑。
-Linux 采用 AppImage（在 ubuntu-22.04 上构建以控制 glibc 基线），实际发行版兼容性仍需验证；
+Linux 采用 AppImage：x86_64 / aarch64 分别在 `ubuntu-22.04` / `ubuntu-22.04-arm` 原生构建，以控制 glibc 基线（2.35）；实际发行版兼容性仍需验证；
 macOS 产出 Intel + Apple Silicon 通用二进制的 `.dmg`。
 
 常规 push / PR 的检查见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：
 Linux 运行格式、Clippy、文档及离屏 GUI 测试并上传截图；Windows / macOS 运行非 GUI 回归测试。
+发布工作流另外在 Windows x64 / ARM64、Linux x86_64 / aarch64 上构建并运行非 GUI 回归测试。
+ARM64 包仍需实机验证窗口、字体、文件对话框和配置保存；构建成功不代表桌面兼容性已验证。
+
+发布工作流使用原生 ARM runner（`windows-11-arm`、`ubuntu-22.04-arm`）；运行前需确保仓库可使用这些 runner。
+可先手动运行 `Release` 工作流：只上传构建产物，不创建 Release；推送 `v*` 标签时才发布全部五个文件。
 维护说明见 [CONTRIBUTING.md](CONTRIBUTING.md)，本轮修改见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 目录结构
